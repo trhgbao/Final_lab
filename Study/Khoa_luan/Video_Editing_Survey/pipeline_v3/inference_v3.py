@@ -61,8 +61,9 @@ except (ImportError, ValueError):
 
 
 
-def read_video_frames(video_path: str, process_length: int = 49, stride: int = 1, sample_size=(384, 672)):
-    print(f"==> Reading input video: {video_path}")
+def read_video_frames(video_path: str, process_length: int = 49, stride: int = 1, sample_size=(384, 672), quiet: bool = False):
+    if not quiet:
+        print(f"==> Reading input video: {video_path}")
     try:
         from decord import VideoReader, cpu
         vr = VideoReader(video_path, ctx=cpu(0))
@@ -94,7 +95,7 @@ def read_video_frames(video_path: str, process_length: int = 49, stride: int = 1
         return frames
 
 
-def save_video(tensor_data, save_path: str, fps: int = 10):
+def save_video(tensor_data, save_path: str, fps: int = 10, quiet: bool = False):
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
     if isinstance(tensor_data, torch.Tensor):
         if tensor_data.dtype != torch.uint8:
@@ -112,7 +113,8 @@ def save_video(tensor_data, save_path: str, fps: int = 10):
         frame_bgr = cv2.cvtColor(arr[i], cv2.COLOR_RGB2BGR)
         out.write(frame_bgr)
     out.release()
-    print(f"--> Saved video to {save_path}")
+    if not quiet:
+        print(f"--> Saved video to {save_path}")
 
 
 
@@ -141,12 +143,24 @@ def resolve_transformer_dir(base_dir: str) -> str:
 class PipelineV3:
     def __init__(self, opts):
         self.opts = opts
+        self.quiet = getattr(opts, "quiet", False)
         self.device = torch.device(opts.device)
         self.weight_dtype = torch.bfloat16 if opts.dtype == "bf16" else torch.float16
 
-        print("=" * 80)
-        print("         PIPELINE V3: CAMERA TRAJECTORY RETARGETING SYSTEM")
-        print("=" * 80)
+        if self.quiet:
+            import warnings
+            warnings.filterwarnings("ignore")
+            try:
+                from diffusers.utils import logging as d_logging
+                from transformers import logging as t_logging
+                d_logging.set_verbosity_error()
+                t_logging.set_verbosity_error()
+            except Exception:
+                pass
+        else:
+            print("=" * 80)
+            print("         PIPELINE V3: CAMERA TRAJECTORY RETARGETING SYSTEM")
+            print("=" * 80)
 
         # 1. 3D Warper
         self.warper = Warper3D(resolution=tuple(opts.sample_size), device=self.device)
@@ -160,7 +174,8 @@ class PipelineV3:
         opts.model_name = resolve_dir_with_target(opts.model_name, "vae", "config.json")
         opts.transformer_path = resolve_transformer_dir(opts.transformer_path)
 
-        print(f"--> Loading VAE, Text Encoder & Scheduler from {opts.model_name}...")
+        if not self.quiet:
+            print(f"--> Loading VAE, Text Encoder & Scheduler from {opts.model_name}...")
         vae = AutoencoderKLCogVideoX.from_pretrained(
             opts.model_name, subfolder="vae", local_files_only=True
         ).to(self.weight_dtype)
@@ -172,7 +187,8 @@ class PipelineV3:
 
         # 3. Load Transformer (Official SOTA weights or Base + DoRA + Stage 2)
         if opts.use_official_weights:
-            print(f"--> Loading CrossTransformer3D from official SOTA baseline: {opts.transformer_path}...")
+            if not self.quiet:
+                print(f"--> Loading CrossTransformer3D from official SOTA baseline: {opts.transformer_path}...")
             transformer = CrossTransformer3DModel.from_pretrained(
                 opts.transformer_path, local_files_only=True
             ).to(self.weight_dtype)
@@ -197,7 +213,8 @@ class PipelineV3:
                         if os.path.exists(ct):
                             base_trans_path = ct
                             break
-            print(f"--> Loading Base Transformer from {base_trans_path or opts.model_name} with Stage 2 Cross-Attention enabled...")
+            if not self.quiet:
+                print(f"--> Loading Base Transformer from {base_trans_path or opts.model_name} with Stage 2 Cross-Attention enabled...")
             transformer = CrossTransformer3DModel.from_pretrained_2d(
                 base_trans_path or opts.model_name,
                 subfolder=None if base_trans_path else "transformer",
@@ -206,7 +223,8 @@ class PipelineV3:
 
         # Load DoRA checkpoint if provided
         if opts.dora_checkpoint and os.path.exists(opts.dora_checkpoint):
-            print(f"--> Loading trained DoRA checkpoint from {opts.dora_checkpoint}...")
+            if not self.quiet:
+                print(f"--> Loading trained DoRA checkpoint from {opts.dora_checkpoint}...")
             dora_r = getattr(opts, "dora_r", 16)
             dora_alpha = getattr(opts, "dora_alpha", 32.0)
             transformer.enable_dora(r=dora_r, lora_alpha=dora_alpha)
@@ -215,7 +233,8 @@ class PipelineV3:
 
         # Load Stage 2 checkpoint if provided
         if getattr(opts, "stage2_checkpoint", None) and os.path.exists(opts.stage2_checkpoint):
-            print(f"--> Loading trained Stage 2 Appearance checkpoint from {opts.stage2_checkpoint}...")
+            if not self.quiet:
+                print(f"--> Loading trained Stage 2 Appearance checkpoint from {opts.stage2_checkpoint}...")
             transformer.load_stage2_checkpoint(opts.stage2_checkpoint)
 
         # Build Pipeline
@@ -232,11 +251,19 @@ class PipelineV3:
             local_files_only=True,
         )
 
+        if self.quiet:
+            try:
+                self.pipeline.set_progress_bar_config(leave=True)
+            except Exception:
+                pass
+
         if opts.low_gpu_memory_mode:
-            print("--> Low GPU Memory Mode: Sequential CPU Offloading enabled (16GB VRAM friendly).")
+            if not self.quiet:
+                print("--> Low GPU Memory Mode: Sequential CPU Offloading enabled (16GB VRAM friendly).")
             self.pipeline.enable_sequential_cpu_offload()
         else:
-            print("--> Standard GPU Mode: Model offloaded to RTX 6000 VRAM.")
+            if not self.quiet:
+                print("--> Standard GPU Mode: Model offloaded to RTX 6000 VRAM.")
             try:
                 self.pipeline.enable_model_cpu_offload()
             except Exception:
@@ -245,7 +272,8 @@ class PipelineV3:
     def run(self, video_path: str, target_pose=(0.0, -30.0, 0.3, 0.0, 0.0)):
         opts = self.opts
         theta, phi, r, x, y = target_pose
-        print(f"\n[Execution] Retargeting Camera: Pitch={theta}°, Pan={phi}°, Distance={r}, dX={x}, dY={y}")
+        if not self.quiet:
+            print(f"\n[Execution] Retargeting Camera: Pitch={theta}°, Pan={phi}°, Distance={r}, dX={x}, dY={y}")
 
         # 1. Read input frames
         frames = read_video_frames(video_path, opts.video_length, opts.stride, tuple(opts.sample_size))
@@ -289,7 +317,8 @@ class PipelineV3:
                         break
 
         if found_cache:
-            print(f"--> [DepthCache] Hit: Loading cached depth from {found_cache}...")
+            if not self.quiet:
+                print(f"--> [DepthCache] Hit: Loading cached depth from {found_cache}...")
             depth_data = np.load(found_cache)
             key = "depths" if "depths" in depth_data else ("depth" if "depth" in depth_data else "arr_0")
             depths_np = depth_data[key][: opts.video_length]
@@ -297,7 +326,8 @@ class PipelineV3:
         elif DepthCrafterEstimator is not None:
             # Run DepthCrafter on the fly
             try:
-                print(f"--> [DepthCrafter] Estimating real metric depth for {video_path}...")
+                if not self.quiet:
+                    print(f"--> [DepthCrafter] Estimating real metric depth for {video_path}...")
                 depth_estimator = DepthCrafterEstimator(
                     unet_path=getattr(opts, "depthcrafter_unet", None),
                     svd_path=getattr(opts, "depthcrafter_svd", None),
@@ -316,17 +346,20 @@ class PipelineV3:
                     os.makedirs(cache_dir, exist_ok=True)
                     depth_np = depths_tensor.squeeze(1).cpu().numpy().astype(np.float32)
                     np.savez_compressed(cache_path, depths=depth_np, depth=depth_np)
-                    print(f"--> [DepthCache] Saved cache to {cache_path}")
+                    if not self.quiet:
+                        print(f"--> [DepthCache] Saved cache to {cache_path}")
 
                 # Free DepthCrafter VRAM
                 depth_estimator.free_memory()
             except Exception as e:
-                print(f"[Warning] DepthCrafter on-the-fly estimation failed: {e}")
+                if not self.quiet:
+                    print(f"[Warning] DepthCrafter on-the-fly estimation failed: {e}")
                 depths_tensor = None
 
         if depths_tensor is None:
             # Fallback: Normalized geometric depth scaffold
-            print("--> [Notice] Using smooth geometric depth scaffold fallback...")
+            if not self.quiet:
+                print("--> [Notice] Using smooth geometric depth scaffold fallback...")
             h, w = opts.sample_size
             y_grad = np.linspace(1.5, 3.5, h)[:, None]
             base_d = np.tile(y_grad, (1, w))
@@ -357,12 +390,13 @@ class PipelineV3:
         )
 
         # 4. 3D Forward Warping Loop
-        print("--> Warping point cloud to target camera trajectory...")
+        if not self.quiet:
+            print("--> Warping point cloud to target camera trajectory...")
         warped_images = []
         masks = []
         heal_holes = not getattr(opts, "no_heal_holes", False)
         heal_hole_size = getattr(opts, "heal_hole_size", 25)
-        for i in tqdm(range(opts.video_length), desc="Point Cloud Splatting"):
+        for i in tqdm(range(opts.video_length), desc="Point Cloud Splatting", disable=self.quiet):
             w_img, w_mask, _ = self.warper.forward_warp(
                 frames_tensor[i : i + 1],
                 None,
@@ -395,11 +429,12 @@ class PipelineV3:
 
         # Save Warped scaffold & Mask
         os.makedirs(opts.out_dir, exist_ok=True)
-        save_video(cond_video.permute(0, 2, 3, 1), os.path.join(opts.out_dir, f"render_pan_{int(phi)}.mp4"), fps=opts.fps)
-        save_video(cond_masks.repeat(1, 3, 1, 1).permute(0, 2, 3, 1), os.path.join(opts.out_dir, f"mask_pan_{int(phi)}.mp4"), fps=opts.fps)
+        save_video(cond_video.permute(0, 2, 3, 1), os.path.join(opts.out_dir, f"render_pan_{int(phi)}.mp4"), fps=opts.fps, quiet=self.quiet)
+        save_video(cond_masks.repeat(1, 3, 1, 1).permute(0, 2, 3, 1), os.path.join(opts.out_dir, f"mask_pan_{int(phi)}.mp4"), fps=opts.fps, quiet=self.quiet)
 
         # 5. Diffusion Denoising Inpainting
-        print("--> Generating high-fidelity novel view via Ref-DiT...")
+        if not self.quiet:
+            print("--> Generating high-fidelity novel view via Ref-DiT...")
         generator = torch.Generator(device=self.device).manual_seed(opts.seed)
 
         with torch.no_grad():
@@ -421,7 +456,7 @@ class PipelineV3:
         # 6. Save final output
         final_video = sample[0].permute(1, 2, 3, 0)  # (F, H, W, 3) in [0, 1]
         output_path = os.path.join(opts.out_dir, f"gen_pan_{int(phi)}.mp4")
-        save_video(final_video, output_path, fps=opts.fps)
+        save_video(final_video, output_path, fps=opts.fps, quiet=self.quiet)
 
         # 7. Side-by-side visualization
         tensor_left = (frames_tensor.permute(0, 2, 3, 1) + 1.0) / 2.0
@@ -431,9 +466,10 @@ class PipelineV3:
         interval = torch.ones(opts.video_length, opts.sample_size[0], 20, 3, device=tensor_left.device)
         triptych = torch.cat([tensor_left, interval, tensor_mid, interval, tensor_right], dim=2)
         viz_path = os.path.join(opts.out_dir, f"viz_pan_{int(phi)}.mp4")
-        save_video(triptych, viz_path, fps=opts.fps)
-        print(f"\n[Success] Generated Video: {output_path}")
-        print(f"[Success] Triptych Comparison: {viz_path}")
+        save_video(triptych, viz_path, fps=opts.fps, quiet=self.quiet)
+        if not self.quiet:
+            print(f"\n[Success] Generated Video: {output_path}")
+            print(f"[Success] Triptych Comparison: {viz_path}")
         return output_path
 
 
@@ -454,6 +490,7 @@ def main():
     parser.add_argument("--heal_hole_size", type=int, default=25, help="Max pixel area of splatting cracks to heal on proxy (default: 25)")
     parser.add_argument("--no_heal_holes", action="store_true", default=False, help="Disable healing of small splatting cracks")
     parser.add_argument("--mask_threshold", type=float, default=0.85, help="Threshold to binarize latent inpaint mask (default: 0.85)")
+    parser.add_argument("--quiet", action="store_true", default=False, help="Suppress verbose logging, only show progress bar")
 
     parser.add_argument("--model_name", type=str, default="alibaba-pai/CogVideoX-Fun-V1.1-5b-InP")
     parser.add_argument("--transformer_path", type=str, default="TrajectoryCrafter/TrajectoryCrafter")

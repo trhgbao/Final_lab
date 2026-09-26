@@ -9,6 +9,9 @@
 
 import os
 import sys
+import time
+import warnings
+import traceback
 import re
 import glob
 import base64
@@ -16,6 +19,17 @@ import argparse
 import subprocess
 import gc
 import torch
+
+warnings.filterwarnings("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+try:
+    from diffusers.utils import logging as d_logging
+    from transformers import logging as t_logging
+    d_logging.set_verbosity_error()
+    t_logging.set_verbosity_error()
+except Exception:
+    pass
 
 try:
     from IPython.display import display, HTML
@@ -256,7 +270,7 @@ def convert_to_h264(input_path, output_path):
         return output_path
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     cmd = f'ffmpeg -y -loglevel error -i "{input_path}" -vcodec libx264 -pix_fmt yuv420p "{output_path}"'
-    subprocess.run(cmd, shell=True, check=False)
+    subprocess.run(cmd, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 1024 else input_path
 
 def find_video_path(video_id, video_dir):
@@ -282,7 +296,7 @@ def to_b64(path):
 
 # 6. KHỞI TẠO VÀ THỰC THI KIỂM THỬ ĐA PHIÊN BẢN
 # Base inference options template
-def make_opts(out_dir, use_official=False, dora_ckpt=None, s2_ckpt=None):
+def make_opts(out_dir, use_official=False, dora_ckpt=None, s2_ckpt=None, quiet=True):
     return argparse.Namespace(
         model_name=MODEL_DIR,
         transformer_path=TRANSFORMER_DIR if use_official else (BASE_TRANSFORMER_DIR or "none"),
@@ -311,6 +325,7 @@ def make_opts(out_dir, use_official=False, dora_ckpt=None, s2_ckpt=None):
         far=100.0,
         radius_scale=1.0,
         out_dir=out_dir,
+        quiet=quiet,
     )
 
 eval_matrix = {}
@@ -543,15 +558,22 @@ html_output += "</div>"
 report_path = os.path.join(OUT_EVAL, "eval_checkpoint_evolution_report.html")
 with open(report_path, "w", encoding="utf-8") as f:
     f.write(html_output)
-print(f"\n[Báo cáo hoàn tất] Đã lưu bảng so sánh HTML tại: {report_path}")
 
 root_report = "/kaggle/working/eval_checkpoint_evolution_report.html"
 try:
     with open(root_report, "w", encoding="utf-8") as f:
         f.write(html_output)
-    print(f"[Báo cáo hoàn tất] Đã lưu bản sao trực tiếp tại: {root_report}")
 except Exception:
     pass
+
+elapsed = time.time() - start_time
+mm, ss = divmod(int(elapsed), 60)
+print("\n" + "=" * 75)
+print(f"⏱️ Tổng thời gian chạy: {mm:02d}m {ss:02d}s")
+print(f"📁 Đường dẫn lưu file kết quả:")
+print(f"   - Báo cáo HTML: {report_path}")
+print(f"   - Bản sao root: {root_report}")
+print("=" * 75 + "\n")
 
 if IN_IPYTHON:
     display(HTML(html_output))

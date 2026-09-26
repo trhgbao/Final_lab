@@ -15,6 +15,9 @@
 
 import os
 import sys
+import time
+import warnings
+import traceback
 import glob
 import base64
 import argparse
@@ -47,10 +50,11 @@ for p in [
         sys.path.insert(0, p)
 
 
-def auto_find_path(candidate_paths, description="Path"):
+def auto_find_path(candidate_paths, description="Path", quiet=False):
     for p in candidate_paths:
         if p and os.path.exists(p):
-            print(f"[*] [Phát hiện tự động] {description}: {p}")
+            if not quiet:
+                print(f"[*] [Phát hiện tự động] {description}: {p}")
             return p
     return None
 
@@ -71,7 +75,7 @@ def convert_to_mobile_h264(input_path, output_path):
         f'-c:v libx264 -pix_fmt yuv420p -profile:v main -level 3.1 '
         f'-preset fast -crf 22 -movflags +faststart "{output_path}"'
     )
-    subprocess.run(cmd, shell=True, check=False)
+    subprocess.run(cmd, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 1024 else input_path
 
 
@@ -435,8 +439,12 @@ def generate_comparison_html(
     with open(output_html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
-    print(f"\n✅ [Hoàn tất] Đã tạo file HTML so sánh 4 mô hình tại:")
-    print(f"   --> {output_html_path} ({os.path.getsize(output_html_path) / (1024*1024):.2f} MB)")
+    with open(output_html_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    if not quiet:
+        print(f"\n✅ [Hoàn tất] Đã tạo file HTML so sánh 4 mô hình tại:")
+        print(f"   --> {output_html_path} ({os.path.getsize(output_html_path) / (1024*1024):.2f} MB)")
     return output_html_path
 
 
@@ -448,6 +456,7 @@ def run_comparison_pipeline(
     output_dir="/kaggle/working/eval_comparison_4col",
     output_html="/kaggle/working/so_sanh_4_mo_hinh_mobile.html",
     force_regenerate=False,
+    quiet=True,
 ):
     """
     Điều phối toàn bộ quá trình:
@@ -455,259 +464,295 @@ def run_comparison_pipeline(
     2. Chuyển đổi H.264 Web Mobile.
     3. Mã hóa Base64 và nhúng vào HTML.
     """
-    os.makedirs(output_dir, exist_ok=True)
+    start_time = time.time()
+    if quiet:
+        warnings.filterwarnings("ignore")
+        os.environ["PYTHONWARNINGS"] = "ignore"
+        os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+        try:
+            from diffusers.utils import logging as d_logging
+            from transformers import logging as t_logging
+            d_logging.set_verbosity_error()
+            t_logging.set_verbosity_error()
+        except Exception:
+            pass
 
-    # 1. Phát hiện Model Dirs
-    model_dir = auto_find_path([
-        "/kaggle/input/datasets/tranbao0105/cogvideox-fun-components/CogVideoX-Fun-V1.1-5b-InP",
-        "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-inp",
-        "/kaggle/input/cogvideox-fun-inp",
-        "./checkpoints/CogVideoX-Fun-V1.1-5b-InP",
-    ], description="Base Model Dir (CogVideoX-Fun InP)")
+    try:
+        os.makedirs(output_dir, exist_ok=True)
 
-    transformer_dir = auto_find_path([
-        "/kaggle/input/datasets/tranbao0105/trajectorycrafter-weights/TrajectoryCrafter",
-        "/kaggle/input/datasets/nguynngcnhntrng/trajectorycrafter",
-        "/kaggle/input/trajectorycrafter",
-        "./checkpoints/TrajectoryCrafter",
-    ], description="Baseline SOTA Transformer (Paper gốc)")
+        # 1. Phát hiện Model Dirs
+        model_dir = auto_find_path([
+            "/kaggle/input/datasets/tranbao0105/cogvideox-fun-components/CogVideoX-Fun-V1.1-5b-InP",
+            "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-inp",
+            "/kaggle/input/cogvideox-fun-inp",
+            "./checkpoints/CogVideoX-Fun-V1.1-5b-InP",
+        ], description="Base Model Dir (CogVideoX-Fun InP)", quiet=quiet)
 
-    base_transformer_dir = auto_find_path([
-        "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-transformer/cogvideox_fun_transformer/transformer",
-        "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-transformer/cogvideox_fun_transformer",
-        "/kaggle/input/cogvideox-fun-transformer/transformer",
-        "./checkpoints/transformer",
-    ], description="Base Alibaba PAI Transformer")
+        transformer_dir = auto_find_path([
+            "/kaggle/input/datasets/tranbao0105/trajectorycrafter-weights/TrajectoryCrafter",
+            "/kaggle/input/datasets/nguynngcnhntrng/trajectorycrafter",
+            "/kaggle/input/trajectorycrafter",
+            "./checkpoints/TrajectoryCrafter",
+        ], description="Baseline SOTA Transformer (Paper gốc)", quiet=quiet)
 
-    depth_cache_dir = auto_find_path([
-        "/kaggle/input/datasets/nguynngcnhntrng/realestate10k-depthcrafter-cache/depth_cache",
-        "/kaggle/input/datasets/nguynngcnhntrng/realestate10k-depthcrafter-cache",
-        "/kaggle/input/datasets/tranbao0105/realestate10k-depthcrafter-cache/depth_cache",
-        "/kaggle/working/depth_cache",
-    ], description="Depth Cache Dir")
+        base_transformer_dir = auto_find_path([
+            "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-transformer/cogvideox_fun_transformer/transformer",
+            "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-transformer/cogvideox_fun_transformer",
+            "/kaggle/input/cogvideox-fun-transformer/transformer",
+            "./checkpoints/transformer",
+        ], description="Base Alibaba PAI Transformer", quiet=quiet)
 
-    # 2. Phát hiện Video Mẫu
-    if not video_path or not os.path.exists(video_path):
-        video_path = auto_find_path([
-            "/kaggle/input/datasets/tranbao0105/cameractrl-sota-weights/RealEstate10K_Mini/real-estate-10k-mini/test_256/000c3ab189999a83.mp4",
-            "/kaggle/input/datasets/tranbao0105/cameractrl-sota-weights/RealEstate10K_Mini/real-estate-10k-mini/test_256/145da324f69d1c6b.mp4",
-            "/kaggle/input/realestate10k/test/000c3ab189999a83.mp4",
-        ], description="Video Mẫu Đầu Vào")
-        
-        if not video_path:
-            # Fallback tìm bất kỳ video .mp4 nào
-            cands = glob.glob("/kaggle/input/**/*.mp4", recursive=True)
-            if cands:
-                video_path = cands[0]
-                print(f"[*] Sử dụng video dự phòng tìm được: {video_path}")
+        depth_cache_dir = auto_find_path([
+            "/kaggle/input/datasets/nguynngcnhntrng/realestate10k-depthcrafter-cache/depth_cache",
+            "/kaggle/input/datasets/nguynngcnhntrng/realestate10k-depthcrafter-cache",
+            "/kaggle/input/datasets/tranbao0105/realestate10k-depthcrafter-cache/depth_cache",
+            "/kaggle/working/depth_cache",
+        ], description="Depth Cache Dir", quiet=quiet)
 
-    if not video_path or not os.path.exists(video_path):
-        raise FileNotFoundError("Không tìm thấy video mẫu nào trên hệ thống Kaggle!")
+        # 2. Phát hiện Video Mẫu
+        if not video_path or not os.path.exists(video_path):
+            video_path = auto_find_path([
+                "/kaggle/input/datasets/tranbao0105/cameractrl-sota-weights/RealEstate10K_Mini/real-estate-10k-mini/test_256/000c3ab189999a83.mp4",
+                "/kaggle/input/datasets/tranbao0105/cameractrl-sota-weights/RealEstate10K_Mini/real-estate-10k-mini/test_256/145da324f69d1c6b.mp4",
+                "/kaggle/input/realestate10k/test/000c3ab189999a83.mp4",
+            ], description="Video Mẫu Đầu Vào", quiet=quiet)
+            
+            if not video_path:
+                cands = glob.glob("/kaggle/input/**/*.mp4", recursive=True)
+                if cands:
+                    video_path = cands[0]
+                    if not quiet:
+                        print(f"[*] Sử dụng video dự phòng tìm được: {video_path}")
 
-    video_stem = os.path.splitext(os.path.basename(video_path))[0]
-    raw_phi = int(target_pose[1])
-    motion_name = f"Quay sang trái {-raw_phi}° (Pan Left)" if raw_phi < 0 else f"Góc quay {raw_phi}°"
+        if not video_path or not os.path.exists(video_path):
+            raise FileNotFoundError("Không tìm thấy video mẫu nào trên hệ thống Kaggle!")
 
-    # Chuẩn bị file video gốc và scaffold
-    orig_h264 = os.path.join(output_dir, f"{video_stem}_orig_h264.mp4")
-    convert_to_mobile_h264(video_path, orig_h264)
+        video_stem = os.path.splitext(os.path.basename(video_path))[0]
+        raw_phi = int(target_pose[1])
+        motion_name = f"Quay sang trái {-raw_phi}° (Pan Left)" if raw_phi < 0 else f"Góc quay {raw_phi}°"
 
-    scaffold_h264 = os.path.join(output_dir, f"{video_stem}_scaffold_h264.mp4")
-    found_scaff = find_existing_video([
-        scaffold_h264,
-        f"/kaggle/working/**/{video_stem}/*scaffold*.mp4",
-        f"/kaggle/working/**/{video_stem}/*render*.mp4",
-        f"/kaggle/working/eval_results_stage2/{video_stem}/**/*scaffold*.mp4",
-        f"/kaggle/working/eval_results_stage1/{video_stem}/**/*render*.mp4",
-    ])
-    if found_scaff and not force_regenerate:
-        convert_to_mobile_h264(found_scaff, scaffold_h264)
+        # Chuẩn bị file video gốc và scaffold
+        orig_h264 = os.path.join(output_dir, f"{video_stem}_orig_h264.mp4")
+        convert_to_mobile_h264(video_path, orig_h264)
 
-    # 3. Định nghĩa 4 Model Cần So Sánh
-    configs = [
-        {
-            "id": "baseline",
-            "badge": "1. Baseline (SOTA Paper)",
-            "title": "TrajectoryCrafter Gốc",
-            "color": "#ef4444",
-            "weights_desc": "TrajectoryCrafter Official Pretrained",
-            "notes_html": (
-                "<li>Mô hình SOTA từ bài báo gốc.</li>"
-                "<li>Khả năng lấp đầy tốt ở góc nhỏ, nhưng bị mờ và biến dạng phối cảnh khi quay góc lớn (≥30°).</li>"
-            ),
-            "use_official": True,
-            "dora": None,
-            "s2": None,
-            "existing_patterns": [
-                os.path.join(output_dir, "baseline_sota_h264.mp4"),
-                f"/kaggle/working/**/{video_stem}/**/baseline*.mp4",
-                f"/kaggle/working/eval_results_stage1/{video_stem}/*before*/*.mp4",
-                f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/baseline*.mp4",
-            ]
-        },
-        {
-            "id": "step0",
-            "badge": "2. Checkpoint Step 0",
-            "title": "Model Base (Chưa Train)",
-            "color": "#eab308",
-            "weights_desc": "CogVideoX-Fun-V1.1-5b-InP Base (Alibaba PAI)",
-            "notes_html": (
-                "<li>Chưa học thích ứng quỹ đạo 3D (Step 0).</li>"
-                "<li>Không hiểu kênh 3D Scaffold dẫn tới vùng bị che khuất xuất hiện mảng xám đen lớn.</li>"
-            ),
-            "use_official": False,
-            "dora": None,
-            "s2": None,
-            "existing_patterns": [
-                os.path.join(output_dir, "step0_untrained_h264.mp4"),
-                f"/kaggle/working/**/{video_stem}/**/step0*.mp4",
-                f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/step0*.mp4",
-            ]
-        },
-        {
-            "id": "stage1_step400",
-            "badge": "3. Stage 1 (DoRA Step 400)",
-            "title": "DoRA Khớp Hình Học 3D",
-            "color": "#f97316",
-            "weights_desc": f"DoRA r=16 alpha=32 ({os.path.basename(os.path.dirname(stage1_ckpt))})",
-            "notes_html": (
-                "<li>Huấn luyện DoRA trên Self-Attention & FFN (Stage 1).</li>"
-                "<li>Lấp đầy ~95% các mảng đen 3D scaffold, phục hồi cấu trúc phòng chuẩn xác.</li>"
-                "<li>Vân bề mặt (texture) cơ bản đã liền mạch, loại bỏ biến dạng vỡ góc.</li>"
-            ),
-            "use_official": False,
-            "dora": stage1_ckpt,
-            "s2": None,
-            "existing_patterns": [
-                os.path.join(output_dir, "stage1_step400_h264.mp4"),
-                f"/kaggle/working/**/{video_stem}/**/stage1*.mp4",
-                f"/kaggle/working/eval_results_stage1/{video_stem}/*after*/*.mp4",
-                f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/dataset_step_400*.mp4",
-            ]
-        },
-        {
-            "id": "stage2_step400",
-            "badge": "4. Stage 2 (Mô Hình Hoàn Chỉnh)",
-            "title": "DoRA + Perceiver Appearance",
-            "color": "#10b981",
-            "weights_desc": f"DoRA Step 400 + Perceiver ({os.path.basename(os.path.dirname(stage2_ckpt))})",
-            "notes_html": (
-                "<li>Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention.</li>"
-                "<li>Trích xuất trực tiếp vân vật liệu và ánh sáng từ video gốc sang vùng góc nhìn mới.</li>"
-                "<li>Chi tiết nội thất sắc nét, nhất quán chuyển động và chất lượng hình ảnh vượt trội.</li>"
-            ),
-            "use_official": False,
-            "dora": stage1_ckpt,
-            "s2": stage2_ckpt,
-            "existing_patterns": [
-                os.path.join(output_dir, "stage2_step400_h264.mp4"),
-                f"/kaggle/working/**/{video_stem}/**/stage2*.mp4",
-                f"/kaggle/working/eval_results_stage2/{video_stem}/**/*stage2*.mp4",
-                f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/step400*stage2*.mp4",
-            ]
-        },
-    ]
+        scaffold_h264 = os.path.join(output_dir, f"{video_stem}_scaffold_h264.mp4")
+        found_scaff = find_existing_video([
+            scaffold_h264,
+            f"/kaggle/working/**/{video_stem}/*scaffold*.mp4",
+            f"/kaggle/working/**/{video_stem}/*render*.mp4",
+            f"/kaggle/working/eval_results_stage2/{video_stem}/**/*scaffold*.mp4",
+            f"/kaggle/working/eval_results_stage1/{video_stem}/**/*render*.mp4",
+        ])
+        if found_scaff and not force_regenerate:
+            convert_to_mobile_h264(found_scaff, scaffold_h264)
 
-    # Kiểm tra xem có cần suy luận PipelineV3 không
-    pipe = None
-    from inference_v3 import PipelineV3
+        # 3. Định nghĩa 4 Model Cần So Sánh
+        configs = [
+            {
+                "id": "baseline",
+                "badge": "1. Baseline (SOTA Paper)",
+                "title": "TrajectoryCrafter Gốc",
+                "color": "#ef4444",
+                "weights_desc": "TrajectoryCrafter Official Pretrained",
+                "notes_html": (
+                    "<li>Mô hình SOTA từ bài báo gốc.</li>"
+                    "<li>Khả năng lấp đầy tốt ở góc nhỏ, nhưng bị mờ và biến dạng phối cảnh khi quay góc lớn (≥30°).</li>"
+                ),
+                "use_official": True,
+                "dora": None,
+                "s2": None,
+                "existing_patterns": [
+                    os.path.join(output_dir, "baseline_sota_h264.mp4"),
+                    f"/kaggle/working/**/{video_stem}/**/baseline*.mp4",
+                    f"/kaggle/working/eval_results_stage1/{video_stem}/*before*/*.mp4",
+                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/baseline*.mp4",
+                ]
+            },
+            {
+                "id": "step0",
+                "badge": "2. Checkpoint Step 0",
+                "title": "Model Base (Chưa Train)",
+                "color": "#eab308",
+                "weights_desc": "CogVideoX-Fun-V1.1-5b-InP Base (Alibaba PAI)",
+                "notes_html": (
+                    "<li>Chưa học thích ứng quỹ đạo 3D (Step 0).</li>"
+                    "<li>Không hiểu kênh 3D Scaffold dẫn tới vùng bị che khuất xuất hiện mảng xám đen lớn.</li>"
+                ),
+                "use_official": False,
+                "dora": None,
+                "s2": None,
+                "existing_patterns": [
+                    os.path.join(output_dir, "step0_untrained_h264.mp4"),
+                    f"/kaggle/working/**/{video_stem}/**/step0*.mp4",
+                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/step0*.mp4",
+                ]
+            },
+            {
+                "id": "stage1_step400",
+                "badge": "3. Stage 1 (DoRA Step 400)",
+                "title": "DoRA Khớp Hình Học 3D",
+                "color": "#f97316",
+                "weights_desc": f"DoRA r=16 alpha=32 ({os.path.basename(os.path.dirname(stage1_ckpt)) if stage1_ckpt else 'DoRA'})",
+                "notes_html": (
+                    "<li>Huấn luyện DoRA trên Self-Attention & FFN (Stage 1).</li>"
+                    "<li>Lấp đầy ~95% các mảng đen 3D scaffold, phục hồi cấu trúc phòng chuẩn xác.</li>"
+                    "<li>Vân bề mặt (texture) cơ bản đã liền mạch, loại bỏ biến dạng vỡ góc.</li>"
+                ),
+                "use_official": False,
+                "dora": stage1_ckpt,
+                "s2": None,
+                "existing_patterns": [
+                    os.path.join(output_dir, "stage1_step400_h264.mp4"),
+                    f"/kaggle/working/**/{video_stem}/**/stage1*.mp4",
+                    f"/kaggle/working/eval_results_stage1/{video_stem}/*after*/*.mp4",
+                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/dataset_step_400*.mp4",
+                ]
+            },
+            {
+                "id": "stage2_step400",
+                "badge": "4. Stage 2 (Mô Hình Hoàn Chỉnh)",
+                "title": "DoRA + Perceiver Appearance",
+                "color": "#10b981",
+                "weights_desc": f"DoRA Step 400 + Perceiver ({os.path.basename(os.path.dirname(stage2_ckpt)) if stage2_ckpt else 'Stage 2'})",
+                "notes_html": (
+                    "<li>Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention.</li>"
+                    "<li>Trích xuất trực tiếp vân vật liệu và ánh sáng từ video gốc sang vùng góc nhìn mới.</li>"
+                    "<li>Chi tiết nội thất sắc nét, nhất quán chuyển động và chất lượng hình ảnh vượt trội.</li>"
+                ),
+                "use_official": False,
+                "dora": stage1_ckpt,
+                "s2": stage2_ckpt,
+                "existing_patterns": [
+                    os.path.join(output_dir, "stage2_step400_h264.mp4"),
+                    f"/kaggle/working/**/{video_stem}/**/stage2*.mp4",
+                    f"/kaggle/working/eval_results_stage2/{video_stem}/**/*stage2*.mp4",
+                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/step400*stage2*.mp4",
+                ]
+            },
+        ]
 
-    def make_opts(run_dir, use_official=False, dora=None, s2=None):
-        return argparse.Namespace(
-            model_name=model_dir,
-            transformer_path=transformer_dir if use_official else (base_transformer_dir or "none"),
-            base_transformer_path=base_transformer_dir,
-            use_official_weights=use_official,
-            dora_checkpoint=dora,
-            stage2_checkpoint=s2,
-            dora_r=16,
-            dora_alpha=32.0,
-            video_length=49,
-            stride=1,
-            sample_size=[384, 672],
-            fps=10,
-            seed=42,
-            device="cuda:0" if torch.cuda.is_available() else "cpu",
-            dtype="bf16",
-            low_gpu_memory_mode=False,
-            clean_mask=True,
-            heal_hole_size=25,
-            mask_threshold=0.85,
-            prompt="A high quality, clear indoor room with sharp textures, realistic lighting",
-            negative_prompt="blur, distortion, jitter, flickering, low quality, dark patches",
-            guidance_scale=4.0,
-            inference_steps=25,
-            depth_path=None,
-            depth_cache_dir=depth_cache_dir,
-            near=0.1,
-            far=100.0,
-            radius_scale=1.0,
-            out_dir=run_dir,
+        # Kiểm tra xem có cần suy luận PipelineV3 không
+        from inference_v3 import PipelineV3
+
+        def make_opts(run_dir, use_official=False, dora=None, s2=None):
+            return argparse.Namespace(
+                model_name=model_dir,
+                transformer_path=transformer_dir if use_official else (base_transformer_dir or "none"),
+                base_transformer_path=base_transformer_dir,
+                use_official_weights=use_official,
+                dora_checkpoint=dora,
+                stage2_checkpoint=s2,
+                dora_r=16,
+                dora_alpha=32.0,
+                video_length=49,
+                stride=1,
+                sample_size=[384, 672],
+                fps=10,
+                seed=42,
+                device="cuda:0" if torch.cuda.is_available() else "cpu",
+                dtype="bf16",
+                low_gpu_memory_mode=False,
+                clean_mask=True,
+                heal_hole_size=25,
+                mask_threshold=0.85,
+                prompt="A high quality, clear indoor room with sharp textures, realistic lighting",
+                negative_prompt="blur, distortion, jitter, flickering, low quality, dark patches",
+                guidance_scale=4.0,
+                inference_steps=25,
+                depth_path=None,
+                depth_cache_dir=depth_cache_dir,
+                near=0.1,
+                far=100.0,
+                radius_scale=1.0,
+                out_dir=run_dir,
+                quiet=quiet,
+            )
+
+        processed_models = []
+
+        for idx, cfg in enumerate(configs):
+            c_id = cfg["id"]
+            out_h264 = os.path.join(output_dir, f"{video_stem}_{c_id}_h264.mp4")
+            cfg["out_h264"] = out_h264
+            
+            # 1. Tìm video có sẵn
+            found_vid = None
+            if not force_regenerate:
+                found_vid = find_existing_video([out_h264] + cfg["existing_patterns"])
+
+            if found_vid and os.path.exists(found_vid):
+                print(f"⚡ [{idx + 1}/{len(configs)}] Tái sử dụng: {cfg['title']}")
+                convert_to_mobile_h264(found_vid, out_h264)
+            else:
+                print(f"\n🎬 [{idx + 1}/{len(configs)}] Đang suy luận: {cfg['title']} ({cfg['badge']})...")
+                run_tmp_dir = os.path.join(output_dir, f"run_{c_id}")
+                opts = make_opts(run_tmp_dir, use_official=cfg["use_official"], dora=cfg["dora"], s2=cfg["s2"])
+                
+                pipe = PipelineV3(opts)
+                pipe.run(video_path, target_pose=target_pose)
+                
+                raw_gen = os.path.join(run_tmp_dir, f"gen_pan_{raw_phi}.mp4")
+                raw_scaff = os.path.join(run_tmp_dir, f"render_pan_{raw_phi}.mp4")
+                
+                convert_to_mobile_h264(raw_gen, out_h264)
+                if not os.path.exists(scaffold_h264) and os.path.exists(raw_scaff):
+                    convert_to_mobile_h264(raw_scaff, scaffold_h264)
+
+                # Dọn dẹp VRAM ngay lập tức
+                del pipe
+                pipe = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            cfg["b64"] = to_base64_data_uri(out_h264)
+            processed_models.append(cfg)
+
+        # Đọc Base64 cho Video Gốc và Scaffold
+        orig_b64 = to_base64_data_uri(orig_h264)
+        scaff_b64 = to_base64_data_uri(scaffold_h264)
+
+        # 4. Tạo file HTML
+        report_file = generate_comparison_html(
+            models_info=processed_models,
+            source_video_b64=orig_b64,
+            scaffold_video_b64=scaff_b64,
+            video_stem=video_stem,
+            motion_name=motion_name,
+            output_html_path=output_html,
+            quiet=quiet,
         )
 
-    processed_models = []
+        elapsed = time.time() - start_time
+        mins, secs = divmod(int(elapsed), 60)
+        print("\n" + "=" * 75)
+        print(f"⏱️ Tổng thời gian chạy: {mins:02d}m {secs:02d}s")
+        print(f"📁 Đường dẫn lưu file kết quả:")
+        print(f"   - Báo cáo HTML : {report_file}")
+        print(f"   - Video Gốc    : {orig_h264}")
+        print(f"   - 3D Scaffold  : {scaffold_h264}")
+        for c in processed_models:
+            print(f"   - {c['title']}: {c['out_h264']}")
+        print("=" * 75 + "\n")
 
-    for cfg in configs:
-        c_id = cfg["id"]
-        out_h264 = os.path.join(output_dir, f"{video_stem}_{c_id}_h264.mp4")
-        
-        # 1. Tìm video có sẵn
-        found_vid = None
-        if not force_regenerate:
-            found_vid = find_existing_video([out_h264] + cfg["existing_patterns"])
+        # 5. Hiển thị trong Notebook (nếu đang chạy trong môi trường IPython)
+        if IN_IPYTHON:
+            try:
+                with open(report_file, "r", encoding="utf-8") as f:
+                    display(HTML(f.read()))
+                display(FileLink(report_file))
+            except Exception as e:
+                print(f"[*] Lưu ý hiển thị iframe: {e}")
 
-        if found_vid and os.path.exists(found_vid):
-            print(f"[*] [Tái sử dụng] {cfg['title']}: {found_vid}")
-            convert_to_mobile_h264(found_vid, out_h264)
-        else:
-            print(f"\n--> [Suy luận GPU] Đang chạy mô hình: {cfg['title']} ({cfg['badge']})...")
-            run_tmp_dir = os.path.join(output_dir, f"run_{c_id}")
-            opts = make_opts(run_tmp_dir, use_official=cfg["use_official"], dora=cfg["dora"], s2=cfg["s2"])
-            
-            pipe = PipelineV3(opts)
-            pipe.run(video_path, target_pose=target_pose)
-            
-            raw_gen = os.path.join(run_tmp_dir, f"gen_pan_{raw_phi}.mp4")
-            raw_scaff = os.path.join(run_tmp_dir, f"render_pan_{raw_phi}.mp4")
-            
-            convert_to_mobile_h264(raw_gen, out_h264)
-            if not os.path.exists(scaffold_h264) and os.path.exists(raw_scaff):
-                convert_to_mobile_h264(raw_scaff, scaffold_h264)
+        return report_file
 
-            # Dọn dẹp VRAM ngay lập tức
-            del pipe
-            pipe = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
-        cfg["b64"] = to_base64_data_uri(out_h264)
-        processed_models.append(cfg)
-
-    # Đọc Base64 cho Video Gốc và Scaffold
-    orig_b64 = to_base64_data_uri(orig_h264)
-    scaff_b64 = to_base64_data_uri(scaffold_h264)
-
-    # 4. Tạo file HTML
-    report_file = generate_comparison_html(
-        models_info=processed_models,
-        source_video_b64=orig_b64,
-        scaffold_video_b64=scaff_b64,
-        video_stem=video_stem,
-        motion_name=motion_name,
-        output_html_path=output_html,
-    )
-
-    # 5. Hiển thị trong Notebook (nếu đang chạy trong môi trường IPython)
-    if IN_IPYTHON:
-        try:
-            with open(report_file, "r", encoding="utf-8") as f:
-                display(HTML(f.read()))
-            display(FileLink(report_file))
-        except Exception as e:
-            print(f"[*] Lưu ý hiển thị iframe: {e}")
-
-    return report_file
+    except Exception as e:
+        print("\n" + "=" * 80)
+        print("❌ ĐÃ XẢY RA LỖI TRONG QUÁ TRÌNH THỰC THI (TRACEBACK ĐẦY ĐỦ):")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        raise e
 
 
 if __name__ == "__main__":
@@ -718,6 +763,7 @@ if __name__ == "__main__":
     parser.add_argument("--pan", type=float, default=-30.0)
     parser.add_argument("--output_html", type=str, default="/kaggle/working/so_sanh_4_mo_hinh_mobile.html")
     parser.add_argument("--force_regenerate", action="store_true")
+    parser.add_argument("--verbose", action="store_false", dest="quiet", default=True, help="Hiển thị log chi tiết thay vì chế độ gọn")
     args = parser.parse_args()
 
     run_comparison_pipeline(
@@ -727,4 +773,5 @@ if __name__ == "__main__":
         target_pose=(0.0, args.pan, 0.3, 0.0, 0.0),
         output_html=args.output_html,
         force_regenerate=args.force_regenerate,
+        quiet=args.quiet,
     )
