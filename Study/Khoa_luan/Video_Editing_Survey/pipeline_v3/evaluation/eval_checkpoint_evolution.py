@@ -106,16 +106,17 @@ os.makedirs(OUT_EVAL, exist_ok=True)
 def parse_step_num(path):
     if not path:
         return 0
-    base = os.path.basename(path).lower()
-    m = re.search(r"step(\d+)", base)
+    norm_path = path.replace("\\", "/").lower()
+    m = re.search(r"step(\d+)", norm_path)
     if m:
         return int(m.group(1))
+    base = os.path.basename(norm_path)
     nums = re.findall(r"\d+", base)
     if len(nums) > 1:
         return int(nums[-1])
     elif len(nums) == 1 and not ("stage" in base and nums[0] in ["1", "2"]):
         return int(nums[0])
-    return 999999 if "final" in base else 0
+    return 999999 if "final" in norm_path else 0
 
 candidate_dirs = [
     "/kaggle/input/datasets/tranbao0105/pipeline",
@@ -134,30 +135,20 @@ s2_files = []
 
 for cd in candidate_dirs:
     if os.path.exists(cd):
-        for f in glob.glob(os.path.join(cd, "dora_stage1_*")):
-            if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                s1_files.append(f)
-        for f in glob.glob(os.path.join(cd, "dora_checkpoint_*")):
-            if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                s1_files.append(f)
-        for f in glob.glob(os.path.join(cd, "dora_stage2_*")):
-            if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                s2_files.append(f)
-        for f in glob.glob(os.path.join(cd, "stage2_*")):
-            if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                s2_files.append(f)
-
-# Quét đệ quy thư mục /kaggle/working để không bỏ sót bất kỳ checkpoint vừa train nào
-if os.path.exists("/kaggle/working"):
-    for root, dirs, files in os.walk("/kaggle/working"):
-        for f in files:
-            full = os.path.join(root, f)
-            if os.path.isfile(full) and os.path.getsize(full) > 1024:
-                low = f.lower()
-                if low.startswith("dora_stage1_") or low.startswith("dora_checkpoint_"):
-                    s1_files.append(full)
-                elif low.startswith("dora_stage2_") or low.startswith("stage2_"):
-                    s2_files.append(full)
+        for root, dirs, files in os.walk(cd):
+            for f in files:
+                full = os.path.join(root, f)
+                norm_full = full.replace("\\", "/").lower()
+                if (f.endswith(".pt") or f.endswith(".pth") or f.endswith(".bin")) and os.path.getsize(full) > 1024:
+                    if "stage1" in norm_full or "dora_checkpoint" in norm_full or "stage_1" in norm_full:
+                        s1_files.append(full)
+                    elif "stage2" in norm_full or "stage_2" in norm_full:
+                        s2_files.append(full)
+                elif f == "data.pkl":
+                    if "stage1" in norm_full or "dora" in norm_full:
+                        s1_files.append(full)
+                    elif "stage2" in norm_full:
+                        s2_files.append(full)
 
 # Lọc trùng lặp file
 s1_files = sorted(list(set(s1_files)))

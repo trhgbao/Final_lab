@@ -187,16 +187,17 @@ def train():
     def parse_step_num(path):
         if not path:
             return 0
-        base = os.path.basename(path).lower()
-        m = re.search(r"step(\d+)", base)
+        norm_path = path.replace("\\", "/").lower()
+        m = re.search(r"step(\d+)", norm_path)
         if m:
             return int(m.group(1))
+        base = os.path.basename(norm_path)
         nums = re.findall(r"\d+", base)
         if len(nums) > 1:
             return int(nums[-1])
         elif len(nums) == 1 and not ("stage" in base and nums[0] in ["1", "2"]):
             return int(nums[0])
-        return 999999 if "final" in base else 0
+        return 999999 if "final" in norm_path else 0
 
     if not args.stage1_checkpoint or not os.path.exists(args.stage1_checkpoint):
         cand_s1_dirs = [
@@ -209,12 +210,16 @@ def train():
         found_s1_ckpts = []
         for cd in cand_s1_dirs:
             if os.path.exists(cd):
-                for f in glob.glob(os.path.join(cd, "dora_stage1_*")):
-                    if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                        found_s1_ckpts.append(f)
-                for f in glob.glob(os.path.join(cd, "dora_checkpoint_*")):
-                    if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                        found_s1_ckpts.append(f)
+                for root, dirs, files in os.walk(cd):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        norm_fp = fp.replace("\\", "/").lower()
+                        if (f.endswith(".pt") or f.endswith(".pth") or f.endswith(".bin")) and os.path.getsize(fp) > 1024:
+                            if "stage1" in norm_fp or "dora" in norm_fp or "step" in norm_fp:
+                                found_s1_ckpts.append(fp)
+                        elif f == "data.pkl":
+                            if "stage1" in norm_fp or "dora" in norm_fp or "step" in norm_fp:
+                                found_s1_ckpts.append(fp)
         if found_s1_ckpts:
             sorted_s1 = sorted(set(found_s1_ckpts), key=lambda x: (parse_step_num(x), os.path.getmtime(x)))
             args.stage1_checkpoint = sorted_s1[-1]
@@ -289,12 +294,16 @@ def train():
         found_s2_ckpts = []
         for cd in cand_s2_dirs:
             if os.path.exists(cd):
-                for f in glob.glob(os.path.join(cd, "dora_stage2_*")):
-                    if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                        found_s2_ckpts.append(f)
-                for f in glob.glob(os.path.join(cd, "stage2_*")):
-                    if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                        found_s2_ckpts.append(f)
+                for root, dirs, files in os.walk(cd):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        norm_fp = fp.replace("\\", "/").lower()
+                        if (f.endswith(".pt") or f.endswith(".pth") or f.endswith(".bin")) and os.path.getsize(fp) > 1024:
+                            if "stage2" in norm_fp or "step" in norm_fp:
+                                found_s2_ckpts.append(fp)
+                        elif f == "data.pkl":
+                            if "stage2" in norm_fp or "step" in norm_fp:
+                                found_s2_ckpts.append(fp)
 
         if found_s2_ckpts:
             sorted_s2 = sorted(set(found_s2_ckpts), key=lambda x: (parse_step_num(x), os.path.getmtime(x)))

@@ -45,6 +45,61 @@ from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
+def robust_torch_load(load_path: str, map_location="cpu"):
+    """
+    Robust torch loader that handles:
+    1. Standard .pt / .pth / .bin / .safetensors files
+    2. Unzipped PyTorch model directories (containing data.pkl and data/ directory)
+    3. Direct paths to data.pkl inside an unzipped PyTorch archive folder
+    """
+    import io, zipfile
+
+    if os.path.isfile(load_path):
+        if os.path.basename(load_path) == "data.pkl":
+            archive_dir = os.path.dirname(load_path)
+            return _load_unzipped_pytorch_dir(archive_dir, map_location)
+        try:
+            return torch.load(load_path, map_location=map_location, weights_only=False)
+        except Exception:
+            try:
+                return torch.load(load_path, map_location=map_location)
+            except Exception:
+                parent = os.path.dirname(load_path)
+                for root, dirs, files in os.walk(parent):
+                    if "data.pkl" in files:
+                        return _load_unzipped_pytorch_dir(root, map_location)
+                raise
+
+    elif os.path.isdir(load_path):
+        for root, dirs, files in os.walk(load_path):
+            if "data.pkl" in files:
+                return _load_unzipped_pytorch_dir(root, map_location)
+            for f in files:
+                if f.endswith(".pt") or f.endswith(".pth") or f.endswith(".bin"):
+                    return robust_torch_load(os.path.join(root, f), map_location)
+        raise FileNotFoundError(f"No valid PyTorch weights found in directory: {load_path}")
+    else:
+        raise FileNotFoundError(f"Checkpoint path not found: {load_path}")
+
+
+def _load_unzipped_pytorch_dir(archive_dir: str, map_location="cpu"):
+    """Repacks an unzipped PyTorch directory in-memory and loads it cleanly with torch.load."""
+    import io, zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as zf:
+        for r, ds, fs in os.walk(archive_dir):
+            for f in fs:
+                full = os.path.join(r, f)
+                rel = os.path.relpath(full, os.path.dirname(archive_dir))
+                zf.write(full, rel)
+    buffer.seek(0)
+    try:
+        return torch.load(buffer, map_location=map_location, weights_only=False)
+    except Exception:
+        buffer.seek(0)
+        return torch.load(buffer, map_location=map_location)
+
+
 class CogVideoXPatchEmbed(nn.Module):
     def __init__(
         self,
@@ -646,9 +701,9 @@ class CrossTransformer3DModel(ModelMixin, ConfigMixin):
         print(f"### Saved DoRA weights ({len(dora_dict)} tensors) to {save_path}")
 
     def load_dora(self, load_path: str, strict: bool = False):
-        """Loads DoRA weights from disk."""
+        """Loads DoRA weights from disk (supports .pt, unzipped archives, and data.pkl)."""
         from .dora import load_dora_state_dict
-        state_dict = torch.load(load_path, map_location="cpu")
+        state_dict = robust_torch_load(load_path, map_location="cpu")
         load_dora_state_dict(self, state_dict, strict=strict)
         print(f"### Loaded DoRA weights from {load_path}")
 
@@ -663,8 +718,8 @@ class CrossTransformer3DModel(ModelMixin, ConfigMixin):
         print(f"### Saved Stage 2 Appearance weights to {save_path}")
 
     def load_stage2(self, load_path: str, strict: bool = True):
-        """Loads Stage 2 appearance parameters from disk."""
-        state_dict = torch.load(load_path, map_location="cpu")
+        """Loads Stage 2 appearance parameters from disk (supports .pt, unzipped archives, and data.pkl)."""
+        state_dict = robust_torch_load(load_path, map_location="cpu")
         if "ref_patch_embed" in state_dict and hasattr(self, "ref_patch_embed") and self.ref_patch_embed is not None:
             self.ref_patch_embed.load_state_dict(state_dict["ref_patch_embed"], strict=strict)
         if "perceiver_cross_attention" in state_dict and hasattr(self, "perceiver_cross_attention") and self.perceiver_cross_attention is not None:

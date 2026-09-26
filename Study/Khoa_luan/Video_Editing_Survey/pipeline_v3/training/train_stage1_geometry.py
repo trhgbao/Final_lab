@@ -225,6 +225,22 @@ def train():
     # Auto-resume from existing checkpoint in dataset / working dir
     start_step = 0
     resume_ckpt = None
+
+    def parse_step_num(path):
+        if not path:
+            return 0
+        norm_path = path.replace("\\", "/").lower()
+        m = re.search(r"step(\d+)", norm_path)
+        if m:
+            return int(m.group(1))
+        base = os.path.basename(norm_path)
+        nums = re.findall(r"\d+", base)
+        if len(nums) > 1:
+            return int(nums[-1])
+        elif len(nums) == 1 and not ("stage" in base and nums[0] in ["1", "2"]):
+            return int(nums[0])
+        return 999999 if "final" in norm_path else 0
+
     if args.resume_from_checkpoint and os.path.exists(args.resume_from_checkpoint):
         resume_ckpt = args.resume_from_checkpoint
     else:
@@ -238,25 +254,16 @@ def train():
         found_ckpts = []
         for cd in cand_dirs:
             if os.path.exists(cd):
-                for f in glob.glob(os.path.join(cd, "dora_stage1_*")):
-                    if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                        found_ckpts.append(f)
-                for f in glob.glob(os.path.join(cd, "dora_checkpoint_*")):
-                    if os.path.isfile(f) and os.path.getsize(f) > 1024:
-                        found_ckpts.append(f)
-        def parse_step_num(path):
-            if not path:
-                return 0
-            base = os.path.basename(path).lower()
-            m = re.search(r"step(\d+)", base)
-            if m:
-                return int(m.group(1))
-            nums = re.findall(r"\d+", base)
-            if len(nums) > 1:
-                return int(nums[-1])
-            elif len(nums) == 1 and not ("stage" in base and nums[0] in ["1", "2"]):
-                return int(nums[0])
-            return 999999 if "final" in base else 0
+                for root, dirs, files in os.walk(cd):
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        norm_fp = fp.replace("\\", "/").lower()
+                        if (f.endswith(".pt") or f.endswith(".pth") or f.endswith(".bin")) and os.path.getsize(fp) > 1024:
+                            if "stage1" in norm_fp or "dora" in norm_fp or "step" in norm_fp:
+                                found_ckpts.append(fp)
+                        elif f == "data.pkl":
+                            if "stage1" in norm_fp or "dora" in norm_fp or "step" in norm_fp:
+                                found_ckpts.append(fp)
 
         if found_ckpts:
             sorted_ckpts = sorted(set(found_ckpts), key=lambda x: (parse_step_num(x), os.path.getmtime(x)))
