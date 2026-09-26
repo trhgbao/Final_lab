@@ -107,7 +107,9 @@ def generate_comparison_html(
     scaffold_video_b64,
     video_stem="000c3ab189999a83",
     motion_name="Quay sang trái 30° (Pan Left)",
-    output_html_path="/kaggle/working/so_sanh_4_mo_hinh_mobile.html"
+    output_html_path="/kaggle/working/so_sanh_4_mo_hinh_mobile.html",
+    quiet=False,
+    **kwargs
 ):
     """
     Sinh file HTML Responsive 100% tự chứa, tối ưu cho duyệt trên điện thoại.
