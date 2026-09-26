@@ -186,6 +186,7 @@ def train():
 
     # Auto-discover stage1_checkpoint (Prioritize newly trained in /kaggle/working/checkpoints_stage1 or datasets)
     def parse_step_num(path):
+        import re
         if not path:
             return 0
         norm_path = path.replace("\\", "/").lower()
