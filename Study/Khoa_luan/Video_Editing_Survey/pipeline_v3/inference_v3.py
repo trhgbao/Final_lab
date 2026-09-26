@@ -381,9 +381,14 @@ class PipelineV3:
         cond_video = (torch.cat(warped_images) + 1.0) / 2.0  # (F, 3, H, W) in [0, 1]
         cond_masks = torch.cat(masks)                        # (F, 1, H, W)
 
-        # Reference frames (First 10 clean frames)
+        # Reference frames: Uniformly sampled across entire video (0 to 48) so future objects are visible to Stage 2!
         frames_clean = (frames_tensor.permute(1, 0, 2, 3).unsqueeze(0) + 1.0) / 2.0  # (1, 3, F, H, W)
-        frames_ref = frames_clean[:, :, :10, :, :]
+        ref_count = 10
+        if opts.video_length <= ref_count:
+            frames_ref = frames_clean[:, :, :opts.video_length, :, :]
+        else:
+            ref_indices = torch.linspace(0, opts.video_length - 1, ref_count).long()
+            frames_ref = frames_clean[:, :, ref_indices, :, :]
 
         cond_video_in = cond_video.permute(1, 0, 2, 3).unsqueeze(0)                   # (1, 3, F, H, W)
         cond_masks_in = (1.0 - cond_masks.permute(1, 0, 2, 3).unsqueeze(0)) * 255.0  # 255 for holes

@@ -258,8 +258,12 @@ class DoubleReprojectionDataset(Dataset):
         warped_video = torch.cat(warped_frames, dim=0).cpu()  # (F, 3, H, W)
         mask_video = torch.cat(warped_masks, dim=0).cpu()      # (F, 1, H, W)
 
-        # Reference frames: first N clean frames
-        ref_video = frames_tensor[: self.ref_frames_count].cpu()  # (N_ref, 3, H, W)
+        # Reference frames: Uniformly sampled across entire video so future appearances are learned
+        if self.num_frames <= self.ref_frames_count:
+            ref_video = frames_tensor[: self.ref_frames_count].cpu()
+        else:
+            ref_idx = torch.linspace(0, self.num_frames - 1, self.ref_frames_count).long()
+            ref_video = frames_tensor[ref_idx].cpu()
 
         # Permute to (C, F, H, W)
         target_video_cf = frames_tensor.permute(1, 0, 2, 3).cpu()
