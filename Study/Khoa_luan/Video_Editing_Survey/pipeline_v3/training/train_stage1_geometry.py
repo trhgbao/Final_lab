@@ -77,7 +77,8 @@ def parse_args():
     parser.add_argument("--save_steps", type=int, default=50)
     parser.add_argument("--log_steps", type=int, default=50, help="Print training progress every N steps")
     parser.add_argument("--max_train_steps", type=int, default=-1, help="Max training steps (-1 for unlimited by epochs)")
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint to resume training from")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint to resume training from (or 'none' to train from step 0)")
+    parser.add_argument("--no_resume", action="store_true", help="Do not auto-resume from existing checkpoints; train fresh from step 0")
     parser.add_argument("--resume_step", type=int, default=0, help="Initial step to resume counting from")
     parser.add_argument("--mixed_precision", type=str, default="bf16", choices=["bf16", "fp16", "no"])
     parser.add_argument("--device", type=str, default="cuda")
@@ -241,7 +242,10 @@ def train():
             return int(nums[0])
         return 999999 if "final" in norm_path else 0
 
-    if args.resume_from_checkpoint and os.path.exists(args.resume_from_checkpoint):
+    if args.no_resume or (args.resume_from_checkpoint and args.resume_from_checkpoint.lower() in ["none", "no", "scratch", "false", "0"]):
+        resume_ckpt = None
+        print("--> [Training Mode] Khởi động huấn luyện từ đầu (Step 0, Fresh Train) - Không nạp checkpoint cũ.")
+    elif args.resume_from_checkpoint and os.path.exists(args.resume_from_checkpoint):
         resume_ckpt = args.resume_from_checkpoint
     else:
         cand_dirs = [
