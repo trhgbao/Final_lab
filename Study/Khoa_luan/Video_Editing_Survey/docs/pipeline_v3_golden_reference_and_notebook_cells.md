@@ -163,11 +163,13 @@ for p in ["/kaggle/working", "/kaggle/working/pipeline_v3"]:
 try:
     from pipeline_v3.evaluation.generate_mobile_comparison import run_comparison_pipeline
 
-    # Chạy kịch bản so sánh 4 mô hình ở chế độ Clean Output (quiet=True)
+    # Chạy kịch bản so sánh 4 mô hình với Checkpoint mới nhất & Quỹ đạo tối ưu Covisibility
     report_file = run_comparison_pipeline(
-        target_pose=(0.0, -30.0, 0.3, 0.0, 0.0),
+        stage1_ckpt="/kaggle/input/datasets/tranbao0105/pipeline/dora_stage1_step2000/dora_stage1_step2000/data.pkl",
+        stage2_ckpt="/kaggle/input/datasets/tranbao0105/pipeline/dora_stage2_step1000/dora_stage2_step1000/data.pkl",
+        target_pose=(0.0, 15.0, 0.35, 0.0, 0.0), # Xoay phải 15°, tiến tới 0.35m để khớp hướng nhìn và tận dụng 3D Scaffold
         output_html="/kaggle/working/so_sanh_4_mo_hinh_mobile.html",
-        force_regenerate=False,
+        force_regenerate=True, # Bắt buộc sinh mới với góc xoay và checkpoint mới
         quiet=True,
     )
 except Exception as e:
@@ -220,6 +222,18 @@ $$\mathbf{X}_{\text{in}} = [\mathbf{Z}_t \,(16), \; \mathbf{M}_{\text{latent}} \
 - **Giải pháp Uniform Temporal Sampling**:
   $$\text{Indices} = \text{round}\left(\text{linspace}(0, T - 1, 10)\right) = [0, 5, 10, 16, 21, 26, 32, 37, 43, 48]$$
   Cho phép mạng truy vấn thông tin xuất hiện ở **cả quá khứ lẫn tương lai**, tối đa hóa vùng đồng nhìn (covisibility).
+
+### 2.6. Nguyên Lý Lựa Chọn Quỹ Đạo Kiểm Thử Đánh Giá 3D Scaffold (Covisibility Test)
+- **Vấn đề khi xoay ngược hướng nhìn (Out-of-Frustum Blind Spot)**:
+  - Video mẫu `000c3ab189999a83` có camera gốc **đi thẳng từ từ rồi hướng góc nhìn sang phải**.
+  - Nếu ta đặt quỹ đạo kiểm thử xoay sang trái (Pan Left $-30^\circ$ hoặc $-60^\circ$), toàn bộ góc nhìn mục tiêu hướng vào khoảng không gian mà camera gốc **chưa từng một lần nhìn thấy**.
+  - Kết quả: 3D Scaffold chỉ có một mảng đen mù mịt ($100\%$ disocclusion). Khi đó, cả Stage 1 và Stage 2 buộc phải "vẽ mò" (hallucination) thay vì tái hiện dựa trên vật thể có thật. Ta không thể đánh giá được sức mạnh lấp đầy của 3D Scaffold và cơ chế trích xuất texture của Stage 2.
+- **Quỹ đạo chuẩn để kiểm thử 3D Scaffold (Pan Right $+15^\circ \sim +20^\circ$, Tiến tới $d_r = 0.35\text{m}$)**:
+  - Khi đặt `target_pose = (0.0, 15.0, 0.35, 0.0, 0.0)`:
+    1. Ở các khung hình xa trong tương lai ($t=25 \dots 48$) của video gốc, các vật thể phía bên phải (bàn ghế, góc tường, tranh ảnh) bắt đầu lọt vào trường nhìn của camera.
+    2. Nhờ thuật toán chiếu đám mây điểm 3D (3D Forward Warping), **3D Scaffold sẽ lấy được một phần thông tin hình học và màu sắc của các vật thể này và đưa vào khung hình mục tiêu ngay từ những frame đầu tiên**!
+    3. **Stage 1 (DoRA)**: Nhìn thấy cấu trúc phôi 3D này để neo giữ tọa độ không gian, hàn gắn các khe nứt và phục hồi toàn bộ hình khối vật thể một cách vững chãi.
+    4. **Stage 2 (Ref-DiT)**: Thông qua 10 khung hình tham chiếu trải đều (Uniform Temporal Sampling), Perceiver Cross-Attention sẽ truy vấn trực tiếp chi tiết vân bề mặt (texture) và ánh sáng của vật thể đó từ các frame tương lai, làm tăng tính hiện diện chân thực của vật thể lên mức tối đa!
 
 ---
 

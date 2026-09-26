@@ -509,6 +509,51 @@ def run_comparison_pipeline(
             "/kaggle/working/depth_cache",
         ], description="Depth Cache Dir", quiet=quiet)
 
+        # 1.1 Tự động phát hiện Checkpoint Stage 1 & Stage 2 mới nhất nếu chưa có
+        if not stage1_ckpt or not os.path.exists(stage1_ckpt):
+            found_s1 = [
+                "/kaggle/input/datasets/tranbao0105/pipeline/dora_stage1_step2000/dora_stage1_step2000/data.pkl",
+                "/kaggle/input/pipeline/dora_stage1_step2000/dora_stage1_step2000/data.pkl",
+                "/kaggle/input/datasets/tranbao0105/pipeline/dora_stage1_step400/dora_stage1_step400/data.pkl",
+                "/kaggle/input/pipeline/dora_stage1_step400/dora_stage1_step400/data.pkl",
+            ]
+            for ck in found_s1:
+                if os.path.exists(ck):
+                    stage1_ckpt = ck
+                    break
+            if not stage1_ckpt or not os.path.exists(stage1_ckpt):
+                all_s1 = glob.glob("/kaggle/**/dora_stage1*/**/data.pkl", recursive=True) + glob.glob("/kaggle/**/dora_stage1*.pt", recursive=True)
+                if all_s1:
+                    stage1_ckpt = sorted(all_s1)[-1]
+
+        if not stage2_ckpt or not os.path.exists(stage2_ckpt):
+            found_s2 = [
+                "/kaggle/input/datasets/tranbao0105/pipeline/dora_stage2_step1000/dora_stage2_step1000/data.pkl",
+                "/kaggle/input/pipeline/dora_stage2_step1000/dora_stage2_step1000/data.pkl",
+                "/kaggle/input/datasets/tranbao0105/pipeline/dora_stage2_step400/dora_stage2_step400/data.pkl",
+                "/kaggle/input/pipeline/dora_stage2_step400/dora_stage2_step400/data.pkl",
+            ]
+            for ck in found_s2:
+                if os.path.exists(ck):
+                    stage2_ckpt = ck
+                    break
+            if not stage2_ckpt or not os.path.exists(stage2_ckpt):
+                all_s2 = glob.glob("/kaggle/**/dora_stage2*/**/data.pkl", recursive=True) + glob.glob("/kaggle/**/dora_stage2*.pt", recursive=True)
+                if all_s2:
+                    stage2_ckpt = sorted(all_s2)[-1]
+
+        def get_step_label(p, default="Mới nhất"):
+            if not p:
+                return default
+            norm = p.replace("\\", "/").lower()
+            m = re.search(r"step(\d+)", norm)
+            if m:
+                return f"Step {m.group(1)}"
+            return os.path.basename(os.path.dirname(p)) or default
+
+        s1_label = get_step_label(stage1_ckpt, "Step 2000")
+        s2_label = get_step_label(stage2_ckpt, "Step 1000")
+
         # 2. Phát hiện Video Mẫu
         if not video_path or not os.path.exists(video_path):
             video_path = auto_find_path([
@@ -529,7 +574,7 @@ def run_comparison_pipeline(
 
         video_stem = os.path.splitext(os.path.basename(video_path))[0]
         raw_phi = int(target_pose[1])
-        motion_name = f"Quay sang trái {-raw_phi}° (Pan Left)" if raw_phi < 0 else f"Góc quay {raw_phi}°"
+        motion_name = f"Quay sang phải {raw_phi}° (Pan Right)" if raw_phi > 0 else (f"Quay sang trái {-raw_phi}° (Pan Left)" if raw_phi < 0 else "Đi thẳng (Forward)")
 
         # Chuẩn bị file video gốc và scaffold
         orig_h264 = os.path.join(output_dir, f"{video_stem}_orig_h264.mp4")
@@ -588,11 +633,11 @@ def run_comparison_pipeline(
                 ]
             },
             {
-                "id": "stage1_step400",
-                "badge": "3. Stage 1 (DoRA Step 400)",
-                "title": "DoRA Khớp Hình Học 3D",
+                "id": f"stage1_{s1_label.lower().replace(' ', '')}",
+                "badge": f"3. Stage 1 (DoRA {s1_label})",
+                "title": f"DoRA Khớp Hình Học 3D ({s1_label})",
                 "color": "#f97316",
-                "weights_desc": f"DoRA r=16 alpha=32 ({os.path.basename(os.path.dirname(stage1_ckpt)) if stage1_ckpt else 'DoRA'})",
+                "weights_desc": f"DoRA r=16 alpha=32 ({s1_label})",
                 "notes_html": (
                     "<li>Huấn luyện DoRA trên Self-Attention & FFN (Stage 1).</li>"
                     "<li>Lấp đầy ~95% các mảng đen 3D scaffold, phục hồi cấu trúc phòng chuẩn xác.</li>"
@@ -602,18 +647,18 @@ def run_comparison_pipeline(
                 "dora": stage1_ckpt,
                 "s2": None,
                 "existing_patterns": [
-                    os.path.join(output_dir, "stage1_step400_h264.mp4"),
+                    os.path.join(output_dir, f"stage1_{s1_label.lower().replace(' ', '')}_h264.mp4"),
                     f"/kaggle/working/**/{video_stem}/**/stage1*.mp4",
                     f"/kaggle/working/eval_results_stage1/{video_stem}/*after*/*.mp4",
-                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/dataset_step_400*.mp4",
+                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/dataset_step_*.mp4",
                 ]
             },
             {
-                "id": "stage2_step400",
-                "badge": "4. Stage 2 (Mô Hình Hoàn Chỉnh)",
-                "title": "DoRA + Perceiver Appearance",
+                "id": f"stage2_{s2_label.lower().replace(' ', '')}",
+                "badge": f"4. Stage 2 (Mô Hình Hoàn Chỉnh - {s2_label})",
+                "title": f"DoRA + Perceiver Appearance ({s2_label})",
                 "color": "#10b981",
-                "weights_desc": f"DoRA Step 400 + Perceiver ({os.path.basename(os.path.dirname(stage2_ckpt)) if stage2_ckpt else 'Stage 2'})",
+                "weights_desc": f"DoRA {s1_label} + Perceiver {s2_label}",
                 "notes_html": (
                     "<li>Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention.</li>"
                     "<li>Trích xuất trực tiếp vân vật liệu và ánh sáng từ video gốc sang vùng góc nhìn mới.</li>"
@@ -623,10 +668,10 @@ def run_comparison_pipeline(
                 "dora": stage1_ckpt,
                 "s2": stage2_ckpt,
                 "existing_patterns": [
-                    os.path.join(output_dir, "stage2_step400_h264.mp4"),
+                    os.path.join(output_dir, f"stage2_{s2_label.lower().replace(' ', '')}_h264.mp4"),
                     f"/kaggle/working/**/{video_stem}/**/stage2*.mp4",
                     f"/kaggle/working/eval_results_stage2/{video_stem}/**/*stage2*.mp4",
-                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/step400*stage2*.mp4",
+                    f"/kaggle/working/eval_checkpoint_evolution/{video_stem}/**/step*stage2*.mp4",
                 ]
             },
         ]
