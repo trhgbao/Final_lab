@@ -331,9 +331,9 @@ full_html = f'''<!DOCTYPE html>
   <script>
     const vids = document.querySelectorAll('.sync-vid');
     let spd = 1.0;
-    function syncPlay() {{ vids.forEach(v => v.play().catch(()=>{})); }}
+    function syncPlay() {{ vids.forEach(v => v.play()); }}
     function syncPause() {{ vids.forEach(v => v.pause()); }}
-    function syncRestart() {{ vids.forEach(v => {{ v.currentTime = 0; v.play().catch(()=>{}); }}); }}
+    function syncRestart() {{ vids.forEach(v => v.currentTime = 0); }}
     function toggleSpeed() {{
       spd = (spd === 1.0) ? 0.5 : 1.0;
       document.getElementById('spd-btn').textContent = (spd === 0.5) ? '⚡ 0.5x (Slow-mo)' : '⚡ 1.0x (Chuẩn)';
