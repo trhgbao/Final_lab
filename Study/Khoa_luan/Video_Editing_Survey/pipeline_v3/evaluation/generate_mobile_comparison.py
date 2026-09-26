@@ -15,6 +15,7 @@
 
 import os
 import sys
+import re
 import time
 import warnings
 import traceback
@@ -545,6 +546,7 @@ def run_comparison_pipeline(
         def get_step_label(p, default="Mới nhất"):
             if not p:
                 return default
+            import re
             norm = p.replace("\\", "/").lower()
             m = re.search(r"step(\d+)", norm)
             if m:
