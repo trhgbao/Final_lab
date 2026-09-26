@@ -7,6 +7,7 @@ Learns to query sharp high-frequency texture, lighting, and reflections from the
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import glob
+import re
 import argparse
 import torch
 import torch.nn as nn
