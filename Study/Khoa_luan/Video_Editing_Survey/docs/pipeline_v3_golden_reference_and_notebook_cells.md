@@ -203,11 +203,15 @@ OUT_DIR = "/kaggle/working/eval_comparison"
 HTML_PATH = "/kaggle/working/so_sanh_4_mo_hinh_mobile.html"
 STEM = "000c3ab189999a83"
 
+def safe_size(p):
+    if p and os.path.exists(p):
+        return f"{os.path.getsize(p)/1024:.1f} KB"
+    return "Chưa có"
+
 def force_h264(src, dst):
-    """Bắt buộc chuyển đổi mọi video sang chuẩn web H.264 (yuv420p)."""
     if not src or not os.path.exists(src):
         return None
-    if os.path.exists(dst) and os.path.getsize(dst) > 1024:
+    if os.path.exists(dst) and os.path.getsize(dst) > 10240 and dst.endswith("_h264.mp4"):
         return dst
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     cmd = f'ffmpeg -y -loglevel error -i "{src}" -c:v libx264 -pix_fmt yuv420p -preset fast -crf 23 -movflags +faststart "{dst}"'
@@ -220,28 +224,35 @@ def to_b64(path):
             return f"data:video/mp4;base64,{base64.b64encode(f.read()).decode('utf-8')}"
     return ""
 
-def find_raw(patterns):
-    for p in patterns:
-        matches = glob.glob(p, recursive=True)
-        valid = [m for m in matches if os.path.exists(m) and os.path.getsize(m) > 1024 and not m.endswith("_depth.mp4")]
+# 1. Liệt kê toàn bộ file mp4 có trên ổ đĩa để debug rõ ràng
+all_vids = glob.glob("/kaggle/working/**/*.mp4", recursive=True)
+print("=" * 75)
+print(f"📁 Tổng số file MP4 tìm thấy trong /kaggle/working/: {len(all_vids)}")
+for v in all_vids:
+    print(f"   - {v} ({safe_size(v)})")
+print("=" * 75)
+
+# 2. Tự động nhận diện vai trò của từng video
+def match_video(keywords, fallback_patterns=[]):
+    for v in all_vids:
+        low = v.lower()
+        if all(k.lower() in low for k in keywords):
+            return v
+    for pat in fallback_patterns:
+        m = glob.glob(pat, recursive=True)
+        valid = [x for x in m if os.path.exists(x) and os.path.getsize(x) > 1024 and not x.endswith("_depth.mp4")]
         if valid:
-            return sorted(valid, key=lambda x: (not x.endswith("_h264.mp4"), -os.path.getsize(x)))[0]
+            return valid[0]
     return None
 
-print("=" * 75)
-print("🔍 Đang kiểm tra và chuẩn hóa H.264 cho các video đã sinh...")
-print("=" * 75)
-
-# 1. Video Gốc & 3D Scaffold
-raw_orig = find_raw([f"{OUT_DIR}/{STEM}_orig_h264.mp4", f"/kaggle/input/**/{STEM}.mp4"])
+raw_orig = match_video(["orig"], fallback_patterns=[f"/kaggle/input/**/{STEM}.mp4", f"/kaggle/input/**/*.mp4"])
 orig_h264 = force_h264(raw_orig, f"{OUT_DIR}/{STEM}_orig_h264.mp4")
-print(f"📹 Video Gốc      : {orig_h264} ({os.path.getsize(orig_h264)/1024:.1f} KB)")
+print(f"📹 Video Gốc      : {orig_h264} ({safe_size(orig_h264)})")
 
-raw_scaff = find_raw([f"{OUT_DIR}/{STEM}_scaffold_h264.mp4", f"{OUT_DIR}/run_*/render_*.mp4", f"/kaggle/working/**/{STEM}/*scaffold*.mp4"])
+raw_scaff = match_video(["render"]) or match_video(["scaffold"])
 scaff_h264 = force_h264(raw_scaff, f"{OUT_DIR}/{STEM}_scaffold_h264.mp4")
-print(f"🧱 3D Scaffold    : {scaff_h264} ({os.path.getsize(scaff_h264)/1024:.1f} KB)")
+print(f"🧱 3D Scaffold    : {scaff_h264} ({safe_size(scaff_h264)})")
 
-# 2. 4 Mô Hình
 configs = [
     {
         "badge": "1. Baseline (SOTA Paper)",
@@ -249,7 +260,7 @@ configs = [
         "color": "#ef4444",
         "desc": "TrajectoryCrafter Official Pretrained",
         "notes": "Mô hình SOTA từ bài báo gốc. Khả năng lấp đầy tốt ở góc nhỏ, nhưng bị mờ và biến dạng phối cảnh khi quay góc lớn.",
-        "raw": find_raw([f"{OUT_DIR}/{STEM}_baseline_h264.mp4", f"{OUT_DIR}/run_baseline/gen_pan_15.mp4", f"/kaggle/working/**/baseline*.mp4"]),
+        "raw": match_video(["baseline", "gen"]) or match_video(["baseline"]),
         "dst": f"{OUT_DIR}/{STEM}_baseline_h264.mp4",
     },
     {
@@ -258,7 +269,7 @@ configs = [
         "color": "#eab308",
         "desc": "CogVideoX-Fun-V1.1-5b-InP Base (Alibaba PAI)",
         "notes": "Chưa học thích ứng quỹ đạo 3D (Step 0). Không hiểu kênh 3D Scaffold dẫn tới vùng bị che khuất xuất hiện mảng xám đen lớn.",
-        "raw": find_raw([f"{OUT_DIR}/{STEM}_step0_h264.mp4", f"{OUT_DIR}/run_step0/gen_pan_15.mp4", f"/kaggle/working/**/step0*.mp4"]),
+        "raw": match_video(["step0", "gen"]) or match_video(["step0"]),
         "dst": f"{OUT_DIR}/{STEM}_step0_h264.mp4",
     },
     {
@@ -267,7 +278,7 @@ configs = [
         "color": "#f97316",
         "desc": "DoRA r=16 alpha=32 (Step 2000)",
         "notes": "Huấn luyện DoRA trên Self-Attention & FFN. Lấp đầy ~95% mảng đen 3D scaffold, phục hồi cấu trúc không gian chuẩn xác.",
-        "raw": find_raw([f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4", f"{OUT_DIR}/run_stage1_step2000/gen_pan_15.mp4", f"/kaggle/working/**/stage1*.mp4"]),
+        "raw": match_video(["stage1", "gen"]) or match_video(["step2000", "gen"]) or match_video(["stage1"]),
         "dst": f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4",
     },
     {
@@ -276,17 +287,16 @@ configs = [
         "color": "#10b981",
         "desc": "DoRA Step 2000 + Perceiver Step 1000",
         "notes": "Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention. Chi tiết sắc nét và nhất quán chuyển động vượt trội.",
-        "raw": find_raw([f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4", f"{OUT_DIR}/run_stage2_step1000/gen_pan_15.mp4", f"/kaggle/working/**/stage2*.mp4"]),
+        "raw": match_video(["stage2", "gen"]) or match_video(["step1000", "gen"]) or match_video(["stage2"]),
         "dst": f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4",
     },
 ]
 
 for m in configs:
     m["final"] = force_h264(m["raw"], m["dst"])
-    sz = os.path.getsize(m["final"])/1024 if m["final"] and os.path.exists(m["final"]) else 0
-    print(f"🎬 {m['title']:<32}: {m['final']} ({sz:.1f} KB)")
+    print(f"🎬 {m['title']:<32}: {m['final']} ({safe_size(m['final'])})")
 
-# 3. Tạo HTML So Sánh
+# 3. Tạo thẻ HTML
 cards_html = ""
 for i, m in enumerate(configs):
     b64 = to_b64(m["final"])
@@ -307,6 +317,15 @@ for i, m in enumerate(configs):
         </div>
     </div>
     '''
+
+scaff_section = f'''
+    <div class="source-col">
+      <span style="font-size:12px; font-weight:700; color:#cbd5e1; display:block; margin-bottom:6px;">🧱 3D Scaffold Proxy (Lỗ nứt đen)</span>
+      <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; border-radius:8px;">
+        <source src="{to_b64(scaff_h264)}" type="video/mp4">
+      </video>
+    </div>
+''' if scaff_h264 and os.path.exists(scaff_h264) else ""
 
 full_html = f'''<!DOCTYPE html>
 <html>
@@ -337,12 +356,7 @@ full_html = f'''<!DOCTYPE html>
         <source src="{to_b64(orig_h264)}" type="video/mp4">
       </video>
     </div>
-    <div class="source-col">
-      <span style="font-size:12px; font-weight:700; color:#cbd5e1; display:block; margin-bottom:6px;">🧱 3D Scaffold Proxy (Lỗ nứt đen)</span>
-      <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; border-radius:8px;">
-        <source src="{to_b64(scaff_h264)}" type="video/mp4">
-      </video>
-    </div>
+    {scaff_section}
   </div>
 
   <div class="toolbar">
@@ -377,7 +391,7 @@ with open(HTML_PATH, "w", encoding="utf-8") as f:
 
 print("=" * 75)
 print(f"✅ ĐÃ TẠO THÀNH CÔNG BÁO CÁO HTML SO SÁNH:")
-print(f"📁 File HTML: {HTML_PATH} ({os.path.getsize(HTML_PATH)/(1024*1024):.2f} MB)")
+print(f"📁 File HTML: {HTML_PATH} ({safe_size(HTML_PATH)})")
 print("=" * 75)
 
 display(HTML(full_html))
