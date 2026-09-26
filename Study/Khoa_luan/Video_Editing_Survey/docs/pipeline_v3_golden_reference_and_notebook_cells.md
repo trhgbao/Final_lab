@@ -150,7 +150,10 @@ python -u /kaggle/working/pipeline_v3/training/train_stage2_appearance.py \
 # ==============================================================================
 # [CELL EVAL] SO SÁNH 4 MÔ HÌNH & XUẤT HTML BÁO CÁO (CLEAN OUTPUT MODE)
 # ==============================================================================
-import os, sys, time, warnings, traceback
+import os, sys, re, builtins, time, warnings, traceback
+
+# Bơm re vào builtins để triệt tiêu mọi NameError bất chấp trạng thái cache module
+builtins.re = re
 
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
@@ -161,6 +164,9 @@ for p in ["/kaggle/working", "/kaggle/working/pipeline_v3"]:
         sys.path.insert(0, p)
 
 try:
+    import importlib
+    if "pipeline_v3.evaluation.generate_mobile_comparison" in sys.modules:
+        importlib.reload(sys.modules["pipeline_v3.evaluation.generate_mobile_comparison"])
     from pipeline_v3.evaluation.generate_mobile_comparison import run_comparison_pipeline
 
     # Chạy kịch bản so sánh 4 mô hình với Checkpoint mới nhất & Quỹ đạo tối ưu Covisibility
