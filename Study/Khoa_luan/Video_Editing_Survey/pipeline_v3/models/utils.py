@@ -222,6 +222,8 @@ class Warper:
         intrinsic2: Optional[torch.Tensor],
         mask=False,
         twice=False,
+        heal_holes=True,
+        max_hole_area=25,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Given a frame1 and global transformations transformation1 and transformation2, warps frame1 to next view using
@@ -274,6 +276,8 @@ class Warper:
             warped_frame2, mask2 = self.bilinear_splatting(
                 frame1, mask1, trans_depth1, flow12, None, is_image=True
             )
+            if heal_holes and max_hole_area > 0:
+                warped_frame2, mask2 = self.heal_small_holes(warped_frame2, mask2, max_hole_area=max_hole_area)
             if mask:
                 warped_frame2, mask2 = self.clean_points(warped_frame2, mask2)
             return warped_frame2, mask2, None, flow12
@@ -506,6 +510,65 @@ class Warper:
             assert warped_frame2.max() <= 1.1
             warped_frame2 = torch.clamp(warped_frame2, min=-1, max=1)
         return warped_frame2, mask2
+
+    def heal_small_holes(
+        self,
+        warped_frame2: torch.Tensor,
+        mask2: torch.Tensor,
+        max_hole_area: int = 25,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Solution 2: Proxy Splatting Crack & Hole Healing.
+        Heals small splatting cracks and pinholes (area <= max_hole_area) on the proxy frame
+        using local neighbor colors via fast inpainting, marking them as valid (1.0).
+        Large disocclusions (area > max_hole_area) are preserved as holes for the generative DiT.
+        """
+        if max_hole_area <= 0:
+            return warped_frame2, mask2
+
+        b, c, h, w = warped_frame2.shape
+        healed_frames = []
+        healed_masks = []
+
+        for bi in range(b):
+            img_np = ((warped_frame2[bi].permute(1, 2, 0).detach().cpu().numpy() + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+            hole_mask_bin = ((1.0 - mask2[bi, 0].detach().cpu().numpy()) > 0.5).astype(np.uint8) * 255
+
+            if not np.any(hole_mask_bin):
+                healed_frames.append(warped_frame2[bi : bi + 1])
+                healed_masks.append(mask2[bi : bi + 1])
+                continue
+
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(hole_mask_bin, connectivity=8)
+            if num_labels <= 1:
+                healed_frames.append(warped_frame2[bi : bi + 1])
+                healed_masks.append(mask2[bi : bi + 1])
+                continue
+
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            small_indices = np.where(areas <= max_hole_area)[0] + 1
+
+            if len(small_indices) == 0:
+                healed_frames.append(warped_frame2[bi : bi + 1])
+                healed_masks.append(mask2[bi : bi + 1])
+                continue
+
+            small_holes_mask = np.isin(labels, small_indices).astype(np.uint8) * 255
+            healed_img_np = cv2.inpaint(img_np, small_holes_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+            healed_t = torch.from_numpy(healed_img_np).float().permute(2, 0, 1).unsqueeze(0).to(
+                device=warped_frame2.device, dtype=warped_frame2.dtype
+            ) / 127.5 - 1.0
+
+            small_holes_t = torch.from_numpy(small_holes_mask > 0).to(
+                device=mask2.device, dtype=mask2.dtype
+            ).unsqueeze(0).unsqueeze(0)
+            healed_m = torch.clamp(mask2[bi : bi + 1] + small_holes_t, 0.0, 1.0)
+
+            healed_frames.append(healed_t)
+            healed_masks.append(healed_m)
+
+        return torch.cat(healed_frames, dim=0), torch.cat(healed_masks, dim=0)
 
     def clean_points(self, warped_frame2, mask2):
         warped_frame2 = (warped_frame2 + 1.0) / 2.0

@@ -360,6 +360,8 @@ class PipelineV3:
         print("--> Warping point cloud to target camera trajectory...")
         warped_images = []
         masks = []
+        heal_holes = not getattr(opts, "no_heal_holes", False)
+        heal_hole_size = getattr(opts, "heal_hole_size", 25)
         for i in tqdm(range(opts.video_length), desc="Point Cloud Splatting"):
             w_img, w_mask, _ = self.warper.forward_warp(
                 frames_tensor[i : i + 1],
@@ -370,6 +372,8 @@ class PipelineV3:
                 K[0:1],
                 K[i : i + 1],
                 clean_mask=opts.clean_mask,
+                heal_holes=heal_holes,
+                max_hole_area=heal_hole_size,
             )
             warped_images.append(w_img)
             masks.append(w_mask)
@@ -406,6 +410,7 @@ class PipelineV3:
                 video=cond_video_in,
                 mask_video=cond_masks_in,
                 reference=frames_ref,
+                mask_threshold=getattr(opts, "mask_threshold", 0.85),
             ).videos
 
         # 6. Save final output
@@ -441,6 +446,9 @@ def main():
     parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16"])
     parser.add_argument("--low_gpu_memory_mode", action="store_true", default=False)
     parser.add_argument("--clean_mask", action="store_true", default=True)
+    parser.add_argument("--heal_hole_size", type=int, default=25, help="Max pixel area of splatting cracks to heal on proxy (default: 25)")
+    parser.add_argument("--no_heal_holes", action="store_true", default=False, help="Disable healing of small splatting cracks")
+    parser.add_argument("--mask_threshold", type=float, default=0.85, help="Threshold to binarize latent inpaint mask (default: 0.85)")
 
     parser.add_argument("--model_name", type=str, default="alibaba-pai/CogVideoX-Fun-V1.1-5b-InP")
     parser.add_argument("--transformer_path", type=str, default="TrajectoryCrafter/TrajectoryCrafter")

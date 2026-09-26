@@ -33,7 +33,13 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.image_processor import VaeImageProcessor
 from einops import rearrange
-from models.crosstransformer3d import CrossTransformer3DModel
+try:
+    from pipeline_v3.models.crosstransformer3d import CrossTransformer3DModel
+except (ImportError, ValueError):
+    try:
+        from .crosstransformer3d import CrossTransformer3DModel
+    except (ImportError, ValueError):
+        from models.crosstransformer3d import CrossTransformer3DModel
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -124,7 +130,7 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-def resize_mask(mask, latent, process_first_frame_only=True):
+def resize_mask(mask, latent, process_first_frame_only=True, mask_threshold=0.85):
     latent_size = latent.size()
     batch_size, channels, num_frames, height, width = mask.shape
 
@@ -157,6 +163,34 @@ def resize_mask(mask, latent, process_first_frame_only=True):
         resized_mask = F.interpolate(
             mask, size=target_size, mode='trilinear', align_corners=False
         )
+
+    # Solution 1: Latent mask binarization / thresholding
+    # In CogVideoX-Fun Inpainting convention: 1.0 is valid, 0.0 is hole to inpaint.
+    # If mask_threshold is specified (e.g. 0.85):
+    # Any latent cell containing holes (valid ratio < mask_threshold) is snapped to 0.0 (pure hole),
+    # and clean surface cells (valid ratio >= mask_threshold) are snapped to 1.0 (pure valid).
+    if mask_threshold is not None and mask_threshold > 0:
+        if process_first_frame_only and resized_mask.shape[2] > 1:
+            frame0 = resized_mask[:, :, 0:1, :, :]
+            rem_frames = resized_mask[:, :, 1:, :, :]
+            rem_frames = torch.where(
+                rem_frames < mask_threshold,
+                torch.zeros_like(rem_frames),
+                torch.ones_like(rem_frames),
+            )
+            frame0 = torch.where(
+                frame0 < mask_threshold,
+                torch.zeros_like(frame0),
+                torch.ones_like(frame0),
+            )
+            resized_mask = torch.cat([frame0, rem_frames], dim=2)
+        else:
+            resized_mask = torch.where(
+                resized_mask < mask_threshold,
+                torch.zeros_like(resized_mask),
+                torch.ones_like(resized_mask),
+            )
+
     return resized_mask
 
 
@@ -703,6 +737,7 @@ class TrajCrafter_Pipeline(DiffusionPipeline):
         strength: float = 1,
         noise_aug_strength: float = 0.0563,
         comfyui_progressbar: bool = False,
+        mask_threshold: Optional[float] = 0.85,
     ) -> Union[CogVideoX_Fun_PipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -979,7 +1014,9 @@ class TrajCrafter_Pipeline(DiffusionPipeline):
                         noise_aug_strength=noise_aug_strength,
                     )
                     # mask at latent size, 1 is valid,第一帧变成1,后面变成0
-                    mask_latents = resize_mask(1 - mask_condition, masked_video_latents)
+                    mask_latents = resize_mask(
+                        1 - mask_condition, masked_video_latents, mask_threshold=mask_threshold
+                    )
                     # 缩放1的数值
                     mask_latents = (
                         mask_latents.to(masked_video_latents.device)

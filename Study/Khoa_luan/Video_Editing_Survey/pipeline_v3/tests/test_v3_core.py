@@ -153,6 +153,51 @@ def test_depthcrafter_components():
     print("  --> DepthCrafter Components & Math PASSED!")
 
 
+def test_hole_healing_and_mask_binarization():
+    print("[Test 5] Testing Proxy Hole Healing & Mask Binarization...")
+    device = "cpu"
+    warper = Warper3D(device=device)
+
+    # 1. Test Proxy Small Hole Healing
+    h, w = 64, 64
+    img = torch.full((1, 3, h, w), 0.5, dtype=torch.float32)
+    mask = torch.ones((1, 1, h, w), dtype=torch.float32)
+
+    # Inject small 2x2 hole (area = 4 <= 25)
+    img[:, :, 10:12, 10:12] = -1.0
+    mask[:, :, 10:12, 10:12] = 0.0
+
+    # Inject large 20x20 hole (area = 400 > 25)
+    img[:, :, 30:50, 30:50] = -1.0
+    mask[:, :, 30:50, 30:50] = 0.0
+
+    healed_img, healed_mask = warper.heal_small_holes(img, mask, max_hole_area=25)
+
+    # Verify small hole is healed (mask becomes 1.0, pixel is no longer -1.0)
+    assert healed_mask[:, :, 10:12, 10:12].min().item() == 1.0, "Small hole mask should be marked as valid 1.0!"
+    assert healed_img[:, :, 10:12, 10:12].min().item() > -0.5, "Small hole pixel should be healed from neighbors!"
+
+    # Verify large hole is PRESERVED for DiT inpainting (mask remains 0.0, pixel remains -1.0)
+    assert healed_mask[:, :, 35:45, 35:45].max().item() == 0.0, "Large hole mask should remain 0.0!"
+    assert healed_img[:, :, 35:45, 35:45].max().item() == -1.0, "Large hole pixels should remain -1.0!"
+
+    # 2. Test Mask Binarization in resize_mask
+    from pipeline_v3.models.pipeline_trajectorycrafter import resize_mask
+    mask_in = torch.ones((1, 1, 13, 64, 64), dtype=torch.float32)
+    # Put a hole in middle
+    mask_in[:, :, :, 20:44, 20:44] = 0.0
+
+    dummy_latent = torch.zeros((1, 13, 16, 8, 8), dtype=torch.float32)
+    resized_m = resize_mask(mask_in, dummy_latent, process_first_frame_only=True, mask_threshold=0.85)
+
+    # All values must be strictly binary {0.0, 1.0}
+    unique_vals = torch.unique(resized_m)
+    for v in unique_vals:
+        assert abs(v.item() - 0.0) < 1e-4 or abs(v.item() - 1.0) < 1e-4, f"Mask latent contains non-binary value: {v.item()}"
+
+    print("  --> Proxy Hole Healing & Mask Binarization PASSED!")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("      RUNNING PIPELINE V3 UNIT TESTS")
@@ -161,6 +206,7 @@ if __name__ == "__main__":
     test_dora_layer()
     test_model_two_stage_modes()
     test_depthcrafter_components()
+    test_hole_healing_and_mask_binarization()
     print("=" * 60)
     print("      ALL UNIT TESTS PASSED SUCCESSFULLY! (100%)")
     print("=" * 60 + "\n")

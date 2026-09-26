@@ -202,6 +202,81 @@ class Warper3D:
             warped_frame2 = torch.clamp(warped_frame2, min=-1.0, max=1.0)
         return warped_frame2, mask2
 
+    def heal_small_holes(
+        self,
+        warped_frame2: torch.Tensor,
+        mask2: torch.Tensor,
+        max_hole_area: int = 25,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Solution 2: Proxy Splatting Crack & Hole Healing.
+        Heals small splatting cracks and pinholes (area <= max_hole_area) on the proxy frame
+        using local neighbor colors via fast inpainting, marking them as valid (1.0).
+        Large disocclusions (area > max_hole_area) are preserved as holes for the generative DiT.
+
+        Args:
+            warped_frame2: (b, 3, h, w) in range [-1, 1]
+            mask2: (b, 1, h, w) 1 for valid, 0 for disoccluded hole
+            max_hole_area: maximum pixel area of a hole to be considered a splatting crack (default: 25 px)
+        Returns:
+            healed_frame: (b, 3, h, w) in range [-1, 1]
+            healed_mask: (b, 1, h, w) 1 for valid, 0 for remaining large holes
+        """
+        if max_hole_area <= 0:
+            return warped_frame2, mask2
+
+        b, c, h, w = warped_frame2.shape
+        healed_frames = []
+        healed_masks = []
+
+        for bi in range(b):
+            # Convert frame to [0, 255] uint8 RGB for cv2
+            img_np = ((warped_frame2[bi].permute(1, 2, 0).detach().cpu().numpy() + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+            # Hole mask: 255 for hole, 0 for valid
+            hole_mask_bin = ((1.0 - mask2[bi, 0].detach().cpu().numpy()) > 0.5).astype(np.uint8) * 255
+
+            if not np.any(hole_mask_bin):
+                healed_frames.append(warped_frame2[bi : bi + 1])
+                healed_masks.append(mask2[bi : bi + 1])
+                continue
+
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(hole_mask_bin, connectivity=8)
+            if num_labels <= 1:
+                healed_frames.append(warped_frame2[bi : bi + 1])
+                healed_masks.append(mask2[bi : bi + 1])
+                continue
+
+            # Identify small holes (label 0 is background / valid)
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            small_indices = np.where(areas <= max_hole_area)[0] + 1
+
+            if len(small_indices) == 0:
+                healed_frames.append(warped_frame2[bi : bi + 1])
+                healed_masks.append(mask2[bi : bi + 1])
+                continue
+
+            # Binary mask containing ONLY small holes to heal
+            small_holes_mask = np.isin(labels, small_indices).astype(np.uint8) * 255
+
+            # Fast inpaint on small holes using Navier-Stokes or Telea
+            healed_img_np = cv2.inpaint(img_np, small_holes_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+            # Convert healed image back to [-1, 1] float tensor
+            healed_t = torch.from_numpy(healed_img_np).float().permute(2, 0, 1).unsqueeze(0).to(
+                device=warped_frame2.device, dtype=warped_frame2.dtype
+            ) / 127.5 - 1.0
+
+            # Update mask: mark healed small holes as valid (1.0)
+            small_holes_t = torch.from_numpy(small_holes_mask > 0).to(
+                device=mask2.device, dtype=mask2.dtype
+            ).unsqueeze(0).unsqueeze(0)
+            healed_m = torch.clamp(mask2[bi : bi + 1] + small_holes_t, 0.0, 1.0)
+
+            healed_frames.append(healed_t)
+            healed_masks.append(healed_m)
+
+        return torch.cat(healed_frames, dim=0), torch.cat(healed_masks, dim=0)
+
     def clean_points(self, warped_frame2: torch.Tensor, mask2: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Removes flying pixel noise by dilating the disocclusion mask."""
         warped_frame2_norm = (warped_frame2 + 1.0) / 2.0
@@ -230,6 +305,8 @@ class Warper3D:
         intrinsic1: torch.Tensor,
         intrinsic2: Optional[torch.Tensor] = None,
         clean_mask: bool = True,
+        heal_holes: bool = True,
+        max_hole_area: int = 25,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward warps frame1 from transformation1 to transformation2.
@@ -242,6 +319,9 @@ class Warper3D:
             transformation2: (b, 4, 4) target camera pose
             intrinsic1: (b, 3, 3) source camera intrinsics
             intrinsic2: (b, 3, 3) target camera intrinsics
+            clean_mask: whether to dilate disocclusions to clean fringe noise
+            heal_holes: whether to heal small splatting pinholes using neighbor colors
+            max_hole_area: max area in pixels for a hole to be considered a splatting crack
         Returns:
             warped_frame: (b, 3, h, w) in range [-1, 1]
             mask: (b, 1, h, w) 1 for valid, 0 for disoccluded hole
@@ -268,6 +348,8 @@ class Warper3D:
         flow12 = trans_coordinates.permute(0, 3, 1, 2) - grid
 
         warped_frame2, mask2 = self.bilinear_splatting(frame1, mask1, trans_depth1, flow12, None, is_image=True)
+        if heal_holes and max_hole_area > 0:
+            warped_frame2, mask2 = self.heal_small_holes(warped_frame2, mask2, max_hole_area=max_hole_area)
         if clean_mask:
             warped_frame2, mask2 = self.clean_points(warped_frame2, mask2)
 
