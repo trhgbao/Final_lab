@@ -194,14 +194,19 @@ except Exception as e:
 
 ```python
 # ==============================================================================
-# [PATCH CELL] CHUYỂN ĐỔI CHUẨN H.264 & CHIẾU TRỰC TIẾP VIDEO LÊN NOTEBOOK
+# [PATCH CELL] CHUYỂN ĐỔI CHUẨN H.264 & CHIẾU TRỰC TIẾP VIDEO LÊN NOTEBOOK (TÙY BIẾN GÓC QUỸ ĐẠO)
 # ==============================================================================
 import os, sys, glob, base64, subprocess
 from IPython.display import display, HTML, FileLink
 
 OUT_DIR = "/kaggle/working/eval_comparison"
-HTML_PATH = "/kaggle/working/so_sanh_4_mo_hinh_mobile.html"
 STEM = "000c3ab189999a83"
+
+# ĐẶT ĐÚNG GÓC XOAY VÀ KHOẢNG CÁCH TIẾN ĐÃ CHẠY
+PAN_ANGLE = -45  # Góc xoay (-45 là quay trái, +15 là quay phải)
+DIST = 3.00      # Khoảng cách tiến tới (3.0m)
+HTML_PATH = f"/kaggle/working/so_sanh_4_mo_hinh_pan_{PAN_ANGLE}_mobile.html"
+MOTION_NAME = f"Quay sang trái {-PAN_ANGLE}° (Pan Left {-PAN_ANGLE}°, Tiến {DIST:.2f}m)" if PAN_ANGLE < 0 else f"Quay sang phải {PAN_ANGLE}° (Pan Right {PAN_ANGLE}°, Tiến {DIST:.2f}m)"
 
 def safe_size(p):
     if p and os.path.exists(p):
@@ -211,9 +216,8 @@ def safe_size(p):
 def force_h264(src, dst):
     if not src or not os.path.exists(src):
         return None
-    if os.path.exists(dst) and os.path.getsize(dst) > 10240 and dst.endswith("_h264.mp4"):
-        return dst
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    # Ép convert file mới, luôn ghi đè file đích cũ nếu src mới hơn
     cmd = f'ffmpeg -y -loglevel error -i "{src}" -c:v libx264 -pix_fmt yuv420p -preset fast -crf 23 -movflags +faststart "{dst}"'
     subprocess.run(cmd, shell=True, check=False)
     return dst if os.path.exists(dst) and os.path.getsize(dst) > 1024 else src
@@ -224,33 +228,35 @@ def to_b64(path):
             return f"data:video/mp4;base64,{base64.b64encode(f.read()).decode('utf-8')}"
     return ""
 
-# 1. Liệt kê toàn bộ file mp4 có trên ổ đĩa để debug rõ ràng
+def find_latest(patterns):
+    matches = []
+    for pat in patterns:
+        m = glob.glob(pat, recursive=True)
+        matches.extend(m)
+    valid = [x for x in set(matches) if os.path.exists(x) and os.path.getsize(x) > 1024 and not x.endswith("_depth.mp4")]
+    if valid:
+        return sorted(valid, key=lambda x: os.path.getmtime(x), reverse=True)[0]
+    return None
+
+# 1. Liệt kê toàn bộ file mp4 có trên ổ đĩa để kiểm tra
 all_vids = glob.glob("/kaggle/working/**/*.mp4", recursive=True)
 print("=" * 75)
 print(f"📁 Tổng số file MP4 tìm thấy trong /kaggle/working/: {len(all_vids)}")
-for v in all_vids:
+for v in sorted(all_vids, key=lambda x: os.path.getmtime(x), reverse=True)[:10]:
     print(f"   - {v} ({safe_size(v)})")
 print("=" * 75)
 
-# 2. Tự động nhận diện vai trò của từng video
-def match_video(keywords, fallback_patterns=[]):
-    for v in all_vids:
-        low = v.lower()
-        if all(k.lower() in low for k in keywords):
-            return v
-    for pat in fallback_patterns:
-        m = glob.glob(pat, recursive=True)
-        valid = [x for x in m if os.path.exists(x) and os.path.getsize(x) > 1024 and not x.endswith("_depth.mp4")]
-        if valid:
-            return valid[0]
-    return None
-
-raw_orig = match_video(["orig"], fallback_patterns=[f"/kaggle/input/**/{STEM}.mp4", f"/kaggle/input/**/*.mp4"])
+# 2. Nhận diện video gốc và scaffold tương ứng với góc mới
+raw_orig = find_latest([f"{OUT_DIR}/{STEM}_orig_h264.mp4", f"/kaggle/input/**/{STEM}.mp4"])
 orig_h264 = force_h264(raw_orig, f"{OUT_DIR}/{STEM}_orig_h264.mp4")
 print(f"📹 Video Gốc      : {orig_h264} ({safe_size(orig_h264)})")
 
-raw_scaff = match_video(["render"]) or match_video(["scaffold"])
-scaff_h264 = force_h264(raw_scaff, f"{OUT_DIR}/{STEM}_scaffold_h264.mp4")
+raw_scaff = find_latest([
+    f"{OUT_DIR}/run_*/render_pan_{PAN_ANGLE}.mp4",
+    f"{OUT_DIR}/**/render_pan_{PAN_ANGLE}.mp4",
+    f"{OUT_DIR}/run_*/render_*.mp4",
+])
+scaff_h264 = force_h264(raw_scaff, f"{OUT_DIR}/{STEM}_scaffold_pan_{PAN_ANGLE}_h264.mp4")
 print(f"🧱 3D Scaffold    : {scaff_h264} ({safe_size(scaff_h264)})")
 
 configs = [
@@ -260,8 +266,12 @@ configs = [
         "color": "#ef4444",
         "desc": "TrajectoryCrafter Official Pretrained",
         "notes": "Mô hình SOTA từ bài báo gốc. Khả năng lấp đầy tốt ở góc nhỏ, nhưng bị mờ và biến dạng phối cảnh khi quay góc lớn.",
-        "raw": match_video(["baseline", "gen"]) or match_video(["baseline"]),
-        "dst": f"{OUT_DIR}/{STEM}_baseline_h264.mp4",
+        "raw": find_latest([
+            f"{OUT_DIR}/run_baseline/gen_pan_{PAN_ANGLE}.mp4",
+            f"{OUT_DIR}/**/baseline*pan_{PAN_ANGLE}*.mp4",
+            f"{OUT_DIR}/run_baseline/*.mp4",
+        ]),
+        "dst": f"{OUT_DIR}/{STEM}_baseline_pan_{PAN_ANGLE}_h264.mp4",
     },
     {
         "badge": "2. Checkpoint Step 0",
@@ -269,8 +279,12 @@ configs = [
         "color": "#eab308",
         "desc": "CogVideoX-Fun-V1.1-5b-InP Base (Alibaba PAI)",
         "notes": "Chưa học thích ứng quỹ đạo 3D (Step 0). Không hiểu kênh 3D Scaffold dẫn tới vùng bị che khuất xuất hiện mảng xám đen lớn.",
-        "raw": match_video(["step0", "gen"]) or match_video(["step0"]),
-        "dst": f"{OUT_DIR}/{STEM}_step0_h264.mp4",
+        "raw": find_latest([
+            f"{OUT_DIR}/run_step0/gen_pan_{PAN_ANGLE}.mp4",
+            f"{OUT_DIR}/**/step0*pan_{PAN_ANGLE}*.mp4",
+            f"{OUT_DIR}/run_step0/*.mp4",
+        ]),
+        "dst": f"{OUT_DIR}/{STEM}_step0_pan_{PAN_ANGLE}_h264.mp4",
     },
     {
         "badge": "3. Stage 1 (DoRA Step 2000)",
@@ -278,8 +292,12 @@ configs = [
         "color": "#f97316",
         "desc": "DoRA r=16 alpha=32 (Step 2000)",
         "notes": "Huấn luyện DoRA trên Self-Attention & FFN. Lấp đầy ~95% mảng đen 3D scaffold, phục hồi cấu trúc không gian chuẩn xác.",
-        "raw": match_video(["stage1", "gen"]) or match_video(["step2000", "gen"]) or match_video(["stage1"]),
-        "dst": f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4",
+        "raw": find_latest([
+            f"{OUT_DIR}/run_stage1*/gen_pan_{PAN_ANGLE}.mp4",
+            f"{OUT_DIR}/**/stage1*pan_{PAN_ANGLE}*.mp4",
+            f"{OUT_DIR}/run_stage1*/*.mp4",
+        ]),
+        "dst": f"{OUT_DIR}/{STEM}_stage1_step2000_pan_{PAN_ANGLE}_h264.mp4",
     },
     {
         "badge": "4. Stage 2 (Mô Hình Hoàn Chỉnh - Step 1000)",
@@ -287,8 +305,12 @@ configs = [
         "color": "#10b981",
         "desc": "DoRA Step 2000 + Perceiver Step 1000",
         "notes": "Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention. Chi tiết sắc nét và nhất quán chuyển động vượt trội.",
-        "raw": match_video(["stage2", "gen"]) or match_video(["step1000", "gen"]) or match_video(["stage2"]),
-        "dst": f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4",
+        "raw": find_latest([
+            f"{OUT_DIR}/run_stage2*/gen_pan_{PAN_ANGLE}.mp4",
+            f"{OUT_DIR}/**/stage2*pan_{PAN_ANGLE}*.mp4",
+            f"{OUT_DIR}/run_stage2*/*.mp4",
+        ]),
+        "dst": f"{OUT_DIR}/{STEM}_stage2_step1000_pan_{PAN_ANGLE}_h264.mp4",
     },
 ]
 
@@ -296,7 +318,7 @@ for m in configs:
     m["final"] = force_h264(m["raw"], m["dst"])
     print(f"🎬 {m['title']:<32}: {m['final']} ({safe_size(m['final'])})")
 
-# 3. Tạo thẻ HTML
+# 3. Tạo HTML So Sánh
 cards_html = ""
 for i, m in enumerate(configs):
     b64 = to_b64(m["final"])
@@ -346,7 +368,7 @@ full_html = f'''<!DOCTYPE html>
 <body>
   <div style="text-align:center; padding:14px; background:#1e293b; border-radius:10px; margin-bottom:16px; border:1px solid #334155;">
     <h2 style="margin:0 0 6px 0; color:#38bdf8; font-size:18px;">🎬 BẢNG SO SÁNH 4 MÔ HÌNH (PIPELINE V3)</h2>
-    <p style="margin:0; font-size:12px; color:#94a3b8;">Video: <b>{STEM}</b> &bull; Quỹ đạo: <b>Quay sang phải 15° (Pan Right 15°, Tiến 0.35m)</b></p>
+    <p style="margin:0; font-size:12px; color:#94a3b8;">Video: <b>{STEM}</b> &bull; Quỹ đạo: <b>{MOTION_NAME}</b></p>
   </div>
 
   <div class="sources">
