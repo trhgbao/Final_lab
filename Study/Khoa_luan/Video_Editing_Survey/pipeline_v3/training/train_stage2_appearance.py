@@ -75,7 +75,8 @@ def parse_args():
     parser.add_argument("--dora_alpha", type=float, default=32.0, help="Alpha of Stage 1 DoRA to match checkpoint")
     parser.add_argument("--save_steps", type=int, default=50)
     parser.add_argument("--log_steps", type=int, default=50, help="Print training progress every N steps")
-    parser.add_argument("--max_train_steps", type=int, default=-1, help="Max training steps (-1 for unlimited by epochs)")
+    parser.add_argument("--max_train_steps", type=int, default=-1, help="Max total training steps to reach (-1 for unlimited by epochs)")
+    parser.add_argument("--steps_to_run", "--additional_steps", dest="steps_to_run", type=int, default=-1, help="Number of additional steps to train from the current checkpoint (e.g. 1000)")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to Stage 2 checkpoint to resume training from")
     parser.add_argument("--resume_step", type=int, default=0, help="Initial step to resume counting from")
     parser.add_argument("--mixed_precision", type=str, default="bf16", choices=["bf16", "fp16", "no"])
@@ -380,15 +381,20 @@ def train():
 
     prompt_embeds = torch.zeros((args.batch_size, 226, 4096), device=device, dtype=weight_dtype)
 
-    if args.max_train_steps > start_step:
+    if args.steps_to_run > 0:
+        steps_to_train = args.steps_to_run
+        target_max_step = start_step + steps_to_train
+    elif args.max_train_steps > start_step:
         steps_to_train = args.max_train_steps - start_step
+        target_max_step = args.max_train_steps
     elif args.max_train_steps > 0:
         steps_to_train = args.max_train_steps
+        target_max_step = start_step + steps_to_train
     else:
         steps_to_train = -1
+        target_max_step = -1
 
     total_epochs = (steps_to_train + len(dataloader) - 1) // max(len(dataloader), 1) if steps_to_train > 0 else args.num_epochs
-    target_max_step = args.max_train_steps if args.max_train_steps > start_step else (start_step + args.max_train_steps if args.max_train_steps > 0 else -1)
     print(f"--> [Training Schedule] Kế hoạch huấn luyện Stage 2:")
     print(f"    • Step khởi điểm: {start_step}")
     print(f"    • Target Max Step: {target_max_step if target_max_step > 0 else 'Theo epochs'}")
