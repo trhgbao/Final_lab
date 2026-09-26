@@ -73,10 +73,10 @@ def convert_to_mobile_h264(input_path, output_path):
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     cmd = (
         f'ffmpeg -y -loglevel error -i "{input_path}" '
-        f'-c:v libx264 -pix_fmt yuv420p -profile:v main -level 3.1 '
-        f'-preset fast -crf 22 -movflags +faststart "{output_path}"'
+        f'-c:v libx264 -pix_fmt yuv420p '
+        f'-preset fast -crf 23 -movflags +faststart "{output_path}"'
     )
-    subprocess.run(cmd, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd, shell=True, check=False)
     return output_path if os.path.exists(output_path) and os.path.getsize(output_path) > 1024 else input_path
 
 
