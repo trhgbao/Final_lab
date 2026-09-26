@@ -189,12 +189,12 @@ except Exception as e:
 
 ---
 
-### [CELL PATCH NHANH] HIỂN THỊ TRỰC TIẾP VIDEO ĐÃ SINH LÊN NOTEBOOK & XUẤT HTML (0.5 GIÂY)
-> Dùng cell này khi 4 mô hình đã sinh xong video trên ổ cứng `/kaggle/working/eval_comparison/` để xem ngay tức thì mà không cần chạy lại mô hình khuếch tán:
+### [CELL PATCH NHANH] TỰ ĐỘNG CHUYỂN H.264 & CHIẾU TRỰC TIẾP VIDEO ĐÃ SINH LÊN NOTEBOOK (2 GIÂY)
+> Dùng cell này khi 4 mô hình đã sinh xong video trên ổ cứng `/kaggle/working/eval_comparison/`. Cell sẽ tự động convert mọi video `mp4v` sang chuẩn web `H.264 / yuv420p` để trình duyệt phát mượt mà 100%:
 
 ```python
 # ==============================================================================
-# [PATCH CELL] HIỂN THỊ TRỰC TIẾP VIDEO ĐÃ SINH LÊN NOTEBOOK & XUẤT HTML SO SÁNH
+# [PATCH CELL] CHUYỂN ĐỔI CHUẨN H.264 & CHIẾU TRỰC TIẾP VIDEO LÊN NOTEBOOK
 # ==============================================================================
 import os, sys, glob, base64, subprocess
 from IPython.display import display, HTML, FileLink
@@ -203,15 +203,16 @@ OUT_DIR = "/kaggle/working/eval_comparison"
 HTML_PATH = "/kaggle/working/so_sanh_4_mo_hinh_mobile.html"
 STEM = "000c3ab189999a83"
 
-def find_file(candidates):
-    for c in candidates:
-        if c and os.path.exists(c) and os.path.getsize(c) > 1024:
-            return c
-        matches = glob.glob(c, recursive=True)
-        valid = [m for m in matches if os.path.exists(m) and os.path.getsize(m) > 1024 and not m.endswith("_depth.mp4")]
-        if valid:
-            return sorted(valid, key=lambda x: (not x.endswith("_h264.mp4"), -os.path.getsize(x)))[0]
-    return None
+def force_h264(src, dst):
+    """Bắt buộc chuyển đổi mọi video sang chuẩn web H.264 (yuv420p)."""
+    if not src or not os.path.exists(src):
+        return None
+    if os.path.exists(dst) and os.path.getsize(dst) > 1024:
+        return dst
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    cmd = f'ffmpeg -y -loglevel error -i "{src}" -c:v libx264 -pix_fmt yuv420p -preset fast -crf 23 -movflags +faststart "{dst}"'
+    subprocess.run(cmd, shell=True, check=False)
+    return dst if os.path.exists(dst) and os.path.getsize(dst) > 1024 else src
 
 def to_b64(path):
     if path and os.path.exists(path) and os.path.getsize(path) > 1024:
@@ -219,18 +220,37 @@ def to_b64(path):
             return f"data:video/mp4;base64,{base64.b64encode(f.read()).decode('utf-8')}"
     return ""
 
-# 1. Tìm các video đã sinh
-orig_vid = find_file([f"{OUT_DIR}/{STEM}_orig_h264.mp4", f"/kaggle/input/**/{STEM}.mp4"])
-scaff_vid = find_file([f"{OUT_DIR}/{STEM}_scaffold_h264.mp4", f"{OUT_DIR}/run_*/render_*.mp4", f"/kaggle/working/**/{STEM}/*scaffold*.mp4"])
+def find_raw(patterns):
+    for p in patterns:
+        matches = glob.glob(p, recursive=True)
+        valid = [m for m in matches if os.path.exists(m) and os.path.getsize(m) > 1024 and not m.endswith("_depth.mp4")]
+        if valid:
+            return sorted(valid, key=lambda x: (not x.endswith("_h264.mp4"), -os.path.getsize(x)))[0]
+    return None
 
-models = [
+print("=" * 75)
+print("🔍 Đang kiểm tra và chuẩn hóa H.264 cho các video đã sinh...")
+print("=" * 75)
+
+# 1. Video Gốc & 3D Scaffold
+raw_orig = find_raw([f"{OUT_DIR}/{STEM}_orig_h264.mp4", f"/kaggle/input/**/{STEM}.mp4"])
+orig_h264 = force_h264(raw_orig, f"{OUT_DIR}/{STEM}_orig_h264.mp4")
+print(f"📹 Video Gốc      : {orig_h264} ({os.path.getsize(orig_h264)/1024:.1f} KB)")
+
+raw_scaff = find_raw([f"{OUT_DIR}/{STEM}_scaffold_h264.mp4", f"{OUT_DIR}/run_*/render_*.mp4", f"/kaggle/working/**/{STEM}/*scaffold*.mp4"])
+scaff_h264 = force_h264(raw_scaff, f"{OUT_DIR}/{STEM}_scaffold_h264.mp4")
+print(f"🧱 3D Scaffold    : {scaff_h264} ({os.path.getsize(scaff_h264)/1024:.1f} KB)")
+
+# 2. 4 Mô Hình
+configs = [
     {
         "badge": "1. Baseline (SOTA Paper)",
         "title": "TrajectoryCrafter Gốc",
         "color": "#ef4444",
         "desc": "TrajectoryCrafter Official Pretrained",
         "notes": "Mô hình SOTA từ bài báo gốc. Khả năng lấp đầy tốt ở góc nhỏ, nhưng bị mờ và biến dạng phối cảnh khi quay góc lớn.",
-        "path": find_file([f"{OUT_DIR}/{STEM}_baseline_h264.mp4", f"{OUT_DIR}/run_baseline/gen_pan_15.mp4", f"/kaggle/working/**/baseline*.mp4"])
+        "raw": find_raw([f"{OUT_DIR}/{STEM}_baseline_h264.mp4", f"{OUT_DIR}/run_baseline/gen_pan_15.mp4", f"/kaggle/working/**/baseline*.mp4"]),
+        "dst": f"{OUT_DIR}/{STEM}_baseline_h264.mp4",
     },
     {
         "badge": "2. Checkpoint Step 0",
@@ -238,7 +258,8 @@ models = [
         "color": "#eab308",
         "desc": "CogVideoX-Fun-V1.1-5b-InP Base (Alibaba PAI)",
         "notes": "Chưa học thích ứng quỹ đạo 3D (Step 0). Không hiểu kênh 3D Scaffold dẫn tới vùng bị che khuất xuất hiện mảng xám đen lớn.",
-        "path": find_file([f"{OUT_DIR}/{STEM}_step0_h264.mp4", f"{OUT_DIR}/run_step0/gen_pan_15.mp4", f"/kaggle/working/**/step0*.mp4"])
+        "raw": find_raw([f"{OUT_DIR}/{STEM}_step0_h264.mp4", f"{OUT_DIR}/run_step0/gen_pan_15.mp4", f"/kaggle/working/**/step0*.mp4"]),
+        "dst": f"{OUT_DIR}/{STEM}_step0_h264.mp4",
     },
     {
         "badge": "3. Stage 1 (DoRA Step 2000)",
@@ -246,7 +267,8 @@ models = [
         "color": "#f97316",
         "desc": "DoRA r=16 alpha=32 (Step 2000)",
         "notes": "Huấn luyện DoRA trên Self-Attention & FFN. Lấp đầy ~95% mảng đen 3D scaffold, phục hồi cấu trúc không gian chuẩn xác.",
-        "path": find_file([f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4", f"{OUT_DIR}/run_stage1_step2000/gen_pan_15.mp4", f"/kaggle/working/**/stage1*.mp4"])
+        "raw": find_raw([f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4", f"{OUT_DIR}/run_stage1_step2000/gen_pan_15.mp4", f"/kaggle/working/**/stage1*.mp4"]),
+        "dst": f"{OUT_DIR}/{STEM}_stage1_step2000_h264.mp4",
     },
     {
         "badge": "4. Stage 2 (Mô Hình Hoàn Chỉnh - Step 1000)",
@@ -254,14 +276,20 @@ models = [
         "color": "#10b981",
         "desc": "DoRA Step 2000 + Perceiver Step 1000",
         "notes": "Kết hợp trọn vẹn cả 2 giai đoạn: DoRA Hình Học + 15 Tầng Perceiver Cross-Attention. Chi tiết sắc nét và nhất quán chuyển động vượt trội.",
-        "path": find_file([f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4", f"{OUT_DIR}/run_stage2_step1000/gen_pan_15.mp4", f"/kaggle/working/**/stage2*.mp4"])
+        "raw": find_raw([f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4", f"{OUT_DIR}/run_stage2_step1000/gen_pan_15.mp4", f"/kaggle/working/**/stage2*.mp4"]),
+        "dst": f"{OUT_DIR}/{STEM}_stage2_step1000_h264.mp4",
     },
 ]
 
-# 2. Xây dựng giao diện HTML so sánh Responsive
+for m in configs:
+    m["final"] = force_h264(m["raw"], m["dst"])
+    sz = os.path.getsize(m["final"])/1024 if m["final"] and os.path.exists(m["final"]) else 0
+    print(f"🎬 {m['title']:<32}: {m['final']} ({sz:.1f} KB)")
+
+# 3. Tạo HTML So Sánh
 cards_html = ""
-for i, m in enumerate(models):
-    b64 = to_b64(m["path"])
+for i, m in enumerate(configs):
+    b64 = to_b64(m["final"])
     col = m["color"]
     border = f"border: 2px solid {col};" if i == 3 else f"border: 1px solid #23314e;"
     cards_html += f'''
@@ -306,13 +334,13 @@ full_html = f'''<!DOCTYPE html>
     <div class="source-col">
       <span style="font-size:12px; font-weight:700; color:#cbd5e1; display:block; margin-bottom:6px;">📹 Video Gốc Input</span>
       <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; border-radius:8px;">
-        <source src="{to_b64(orig_vid)}" type="video/mp4">
+        <source src="{to_b64(orig_h264)}" type="video/mp4">
       </video>
     </div>
     <div class="source-col">
       <span style="font-size:12px; font-weight:700; color:#cbd5e1; display:block; margin-bottom:6px;">🧱 3D Scaffold Proxy (Lỗ nứt đen)</span>
       <video class="sync-vid" controls autoplay loop muted playsinline webkit-playsinline style="width:100%; border-radius:8px;">
-        <source src="{to_b64(scaff_vid)}" type="video/mp4">
+        <source src="{to_b64(scaff_h264)}" type="video/mp4">
       </video>
     </div>
   </div>
@@ -352,7 +380,6 @@ print(f"✅ ĐÃ TẠO THÀNH CÔNG BÁO CÁO HTML SO SÁNH:")
 print(f"📁 File HTML: {HTML_PATH} ({os.path.getsize(HTML_PATH)/(1024*1024):.2f} MB)")
 print("=" * 75)
 
-# Chiếu trực tiếp lên Output Notebook & hiển thị link tải về
 display(HTML(full_html))
 display(FileLink(HTML_PATH))
 ```
