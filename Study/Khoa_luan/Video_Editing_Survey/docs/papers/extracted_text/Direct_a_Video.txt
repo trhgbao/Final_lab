@@ -1,0 +1,2368 @@
+--- PAGE 1 ---
+HIGH-FIDELITY INTERPRETABLE INVERSE RIG: AN ACCURATE
+AND SPARSE SOLUTION OPTIMIZING THE QUARTIC
+BLENDSHAPE MODEL
+A PREPRINT
+Stevo Rackovi´c
+Department of Mathematics
+Instituto Superior Técnico
+Lisbon, Portugal
+stevo.rackovic@tecnico.ulisboa.pt
+Cláudia Soares
+Department of Computer Sceince
+NOVA School of Science and Technology
+Caparica, Portugal
+Dušan Jakoveti´c
+Department of Mathematics
+University of Novi Sad
+Novi Sad, Serbia
+Zoranka Desnica
+3Lateral Animation Studio
+Epic Games Company
+February 2023
+ABSTRACT
+We propose a method to ﬁt arbitrarily accurate blendshape rig models by solving the inverse rig
+problem in realistic human face animation. The method considers blendshape models with different
+levels of added corrections and solves the regularized least-squares problem using coordinate descent,
+i.e., iteratively estimating blendshape weights. Besides making the optimization easier to solve,
+this approach ensures that mutually exclusive controllers will not be activated simultaneously and
+improves the goodness of ﬁt after each iteration. We show experimentally that the proposed method
+yields solutions with mesh error comparable to or lower than the state-of-the-art approaches while
+signiﬁcantly reducing the cardinality of the weight vector (over 20%), hence giving a high-ﬁdelity
+reconstruction of the reference expression that is easier to manipulate in the post-production manually.
+Python scripts for the algorithm will be publicly available upon acceptance of the paper.
+Keywords Inverse Rig · Complex Blendshape Model · High-ﬁdelity · Coordinate Descent
+1
+Introduction
+The human face has always occupied a central place in the animation industry due to its role in nonverbal communication
+and our high sensitivity to subtle expression changes. With the advances in movie and video game production, the
+models for representing a face are increasingly more complex and demand algorithms with ever-increasing accuracy
+and attention to detail in order to provide a high-ﬁdelity appearance of the avatars. One of the most popular approaches
+for animating the face is the blendshape model Lewis et al. [2014]. The main building blocks in the blendshape model
+are a neutral mesh, represented in a vector form as b0 ∈R3n, where n is the total number of vertices in the face, and m
+blendshape vectors b1, ..., bm ∈R3n that represent meshes corresponding to the atomic deformations of the face, and
+are later combined to build more complex expressions. In the case of the delta blendshape model, these vectors are
+not actual meshes, but their offsets from the neutral, and they are added on top of the neutral face with corresponding
+activation weights w1, ..., wm. A linear delta blendshape model is given by
+fL(w) = b0 +
+m
+X
+i=1
+wibi = b0 + Bw,
+(1)
+arXiv:2302.04820v2  [cs.CV]  27 Mar 2023
+
+
+--- PAGE 2 ---
+A PREPRINT
+ Cardinality: 65
+ Cardinality: 65 
+ RMSE:  0.07
+ Cardinality: 60 
+ RMSE:  0.18
+ Cardinality: 50 
+ RMSE:  0.28
+ Cardinality: 77 
+ RMSE:  0.09
+ Cardinality: 79 
+ RMSE:  0.14
+ Cardinality: 80 
+ RMSE:  0.04
+Reference
+Quartic (ours)
+Linear (ours)
+Seol
+Joshi
+Çetinaslan
+LMMM
+.29
+.00
+cm
+Figure 1: Ada, an example frame with predictions using different methods. The top row shows a mesh reconstruction,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The bottom row
+shows corresponding blendshape weights activation, with summarized root mean squared error and cardinality of each
+approach. The method of Seol Seol et al. [2011] gives the sparsest vector of weights, yet the error is considerably
+higher than for the other approaches, and the resulting expression is wrong. Our approach with linear rig approximation
+(Linear) corrects some of these artifacts, yet the lips still do not ﬁt well enough, similar to Joshi Joshi et al. [2006] and
+Çetinaslan Çetinaslan and Orvalho [2020a]. The solution of LMMM Rackovi´c et al. [2022] leads to the lowest mesh
+error, but it activates the highest number of blendshapes. Only our approach with quartic corrective terms (Quartic)
+gives a good trade-off between the accurate mesh ﬁt and a low number of activated weights.
+where the subscript L stands for linear, in order to distinguish it from a more complex rig function that we will introduce
+later in this section. The matrix B ∈R3n×m is a blendshape matrix whose columns are the above introduced blendshape
+vectors, and w ∈Rm is a vector of activation weights w = [w1, ..., wm]T .
+The problem that is of interest to us is the inversion of the rig to obtain activations w from an acquired mesh, i.e., the
+inverse rig problem. It takes a given face mesh bb ∈R3n as input and estimates a weight vector w that would produce a
+good approximation to the mesh, i.e., such that fL(w) ≈bb. This is often formulated as a least-squares ﬁtting problem.
+In Joshi et al. [2006], the authors formulate the corresponding optimization problem as
+minimize
+w
+1
+2∥fL(w) −bb∥2,
+(2)
+where ∥· ∥denotes the l2 norm. A solution of (2) can be found in a closed form as
+w = (BT B)−1BT bb = B†bb,
+(3)
+where B† represents the pseudoinverse of the matrix B, and throughout the paper, we refer to this approach as Joshi.
+This solution might be undesirable as it activates all the controllers, or a matrix BT B might be singular if the number
+of vertices is too few relative to the number of model weights Lewis and Anjyo [2010]; hence, more recent papers
+include additional regularization terms to problem (2). Another issue is that Joshi does not incorporate constraints to
+the controllers — for practical applications, weights are restricted to be non-negative since negative weights defy the
+intended semantics of the blendshapes and break the intuition for manual corrections Lewis et al. [2014]. Similarly,
+weights should not exceed a value of 1, although some authors allow for this, justifying it as a way to produce
+exaggerated cartoonish expressions Choe and Ko [2006]. To satisfy the constraints, the solution vector of Joshi can
+be clipped to a feasible set, although this was not done in the original paper. Despite the above issues, the solution of
+Joshi et al. [2006] is often encountered in the literature because of its simplicity. There is a range of variants of this
+approach — versions in Choe and Ko [2006], Liu et al. [2010] include constraints 0 ≤w ≤1; in Lewis and Anjyo
+[2010], Çetinaslan [2016], Çetinaslan and Orvalho [2020a] the weights are regularized by a squared l2 norm to impose
+the stability of the solution, while the l1 norm was used in Ribera et al. [2017] to stress on the sparsity. It is common for
+all these models to estimate all the weights jointly. While this can sometimes lead to a more precise mesh ﬁt, such an
+approach does not allow so much ﬂexibility in manually adjusting the solution weights afterward.
+2
+
+
+--- PAGE 3 ---
+A PREPRINT
+A solution proposed in Seol et al. [2011] follows a different logic, relying on a two-step approach, motivated by the way
+artists animate manually. The weights are visited and estimated sequentially, updating the residuals after each controller.
+Initially, residual vector r ∈R3n is set to be equal to a given mesh r(1) := bb. Then each of the m controllers is visited
+once, solving the following two-step problem:
+For i = 1, ..., m :
+step 1: wi ←argmin
+0≤wi
+∥r(i) −biwi∥2,
+step 2: r(i+1) ←r(i) −biwi.
+(4)
+After each iteration i, step 1 ﬁnds an optimal weight for the blendshape bi, and step 2 removes the corresponding
+estimated effect, producing a new residual vector r(i+1). The output is a vector of weights w, estimated in a greedy
+search manner to ﬁt the original target mesh bb. Throughout the paper, we refer to this approach as Seol.
+An important advantage of Seol is that it empirically avoids simultaneous activation of mutually exclusive blendshapes,
+which is one of the leading causes of instability in the solution. As conﬁrmed experimentally in Seol et al. [2011], this
+also leads to a sparser solution, and hence it is easier to manipulate the animation later if needed. In this approach, the
+order in which controllers are visited plays an important role. The authors suggest ordering them by the magnitude
+of change each blendshape produces when activated, that is, by its squared norm ∥bi∥2. A recent reference Hyde
+et al. [2021] explores a coordinate-wise approach with a more thorough discussion of the coordinate order; they apply
+matching pursuit with pruning to estimate a sparse set of weights, yet without the advantage of a known structure of the
+blendshape rig function, leading to a computationally intensive method.
+1.1
+Contributions
+This paper follows a similar direction as Seol et al. [2011] but addresses several main issues. In the ﬁrst place, we
+target a more complex blendshape model used in modern production for highly-realistic human faces. Besides the
+linear terms in (1), corrective terms for some pairs or tuples of blendshapes are included Seo et al. [2011], Wu et al.
+[2018], Rackovi´c et al. [2022]. A corrective term for the pair of blendshapes bi and bj is denoted as b{ij} ∈R3n, and
+its activation weight is set to the product wiwj. These vectors are called ﬁrst-level corrections, and in a similar manner,
+one can include corrections of higher levels for tuples of three or four blendshapes. In our experiments, we will assume
+blendshape models with three levels of corrections, and hence the blendshape function (here with a subscript Q for
+quartic) is given by
+fQ(w) =b0 + Bw +
+X
+{i,j}∈P
+wiwjb{ij} +
+X
+{i,j,k}∈T
+wiwjwkb{ijk}
++
+X
+{i,j,k,l}∈Q
+wiwjwkwlb{ijkl}
+(5)
+where P, T , and Q are sets of pairs, triplets, and quadruplets of blendshapes that involve a corresponding corrective
+term, respectively.
+Fitting an arbitrarily accurate blendshape rig
+Compared with other methods that involve corrective terms Rackovi´c
+et al. [2022], the approach proposed here leads to computationally efﬁcient solutions under the corrections of any order.
+Our method is general enough to work with any level of corrections. To illustrate this, we will also include a case when
+a linear approximation of the rig is used in the experiments. This is in contrast with Rackovi´c et al. [2022] that can only
+handle ﬁrst-order corrections. The reason why we restrict our experiments to the third level of corrective terms is that
+the animated models at our disposal do not have additional levels of corrections.
+A solution with low cardinality
+Additionally, we add an l1 norm regularizer to penalize the solution cardinality
+further. Finally, we also address the fact that Seol et al. [2011] performs only a single pass over the weights. This can
+be seen as one step of a coordinate descent minimization algorithm. Even though a single pass of the algorithm gives a
+relatively good estimate of the solution, we will show in our experiments that adding several algorithm steps to our data
+ﬁtting procedure can provide a better mesh ﬁt while keeping the cardinality similar.
+The numerical results in Section 4.3 show that our method outperforms the state-of-the-art approaches, giving an
+accurate mesh reconstruction with a mesh error lower or comparable to the best-performing methods and simultaneously
+reducing the cardinality of the weight vector over 20%. It further allows one to work with an arbitrary number of
+blendshape corrections, while the previous papers consider either a linear blendshape model or only a single correction
+3
+
+
+--- PAGE 4 ---
+A PREPRINT
+level. Finally, the proposed method gives smooth temporal transitions, as shown for several animated sequences in the
+supplementary materials. This is also conﬁrmed by the roughness metric (see Section 4.3), as our method shows more
+than double of a reduction compared to the benchmarks of a similar mesh error level.
+1.2
+Notation
+Throughout this paper, scalar values will be denoted with lowercase Latin a, b, c, or lowercase Greek α, β, γ letters.
+Vectors are denoted with bold lowercase letters, e.g., a, b, c and are indexed using a subscript, i.e., the ith element of a
+vector a is ai. If there is a subscript and the letter is still in bold, it is not indexing — we will use this to distinguish
+blendshape vectors (b0, b1, ..., bm) as they have similar properties. We use 0 and 1 to denote vectors of all zeros and all
+ones, respectively. When we use order relations (≥, ≤, =) between two vectors, they are assumed component-wise.
+Matrices are written in bold capital letters, e.g., A, B, C. Functions are given using lowercase letters, but with their
+arguments enclosed in parenthesis, e.g., f(·), g(·). The Euclidean norm is denoted by ∥· ∥.
+2
+Related Work
+Blendshape animation is an attractive research topic because of its high relevance in our perception of the human
+face and the need for more realistic face representation. While anatomically-based face models might produce greater
+ﬁdelity in realistic deformations and perception Sifakis et al. [2005], Ichim et al. [2017], they are usually much harder
+to animate and adjust manually and lack interpretability. Blendshape models have been studied in the literature as
+early as the end of the last century Pighin et al. [1998], Choe and Ko [2006], Choe et al. [2001], and several main
+research directions have been established. The ﬁrst challenge in the model is creating the blendshape basis since it
+can take from a few dozen up to several hundred blendshapes, so it is a time and labor-intensive task. Several papers
+propose automated solutions for producing the basis. In Deng et al. [2006], Bouaziz et al. [2013], the authors apply
+principal component analysis (PCA) over a dense motion capture; however, while PCA-based meshes are well suited
+for automated animation Moser et al. [2021], they lack explainability, making them undesirable to artists. A different
+approach studied by Li et al. [2010, 2013], Ribera et al. [2017] considers a pre-sculpted generic blendshape basis, that
+is used to create a semantically equivalent basis for a custom character applying a deformation transfer. Using a similar
+approach, Chaudhuri et al. [2020] trains a deep learning method to estimate the person-speciﬁc blendshapes from video.
+Our paper does not provide contributions in this aspect and in the method we assume that a blendshape basis is given
+apriori, and that it closely resembles the actor/user.
+The next challenge is adjusting controller weights to produce an animation. This step can be automated if there is a
+reference motion in the form of a 4D scan or motion capture of markers on the actor’s face. This problem is called the
+inverse rig problem or automatic keyframe animation, and there are two main approaches to solving it: model-based
+and data-based methods. Model-based solutions rely on optimization techniques for model ﬁtting and demand a precise
+deﬁnition of a rig function, while data is used for ﬁtting model parameters. The problem is usually formalized as
+a least-squares problem, and regularization is often added to enhance the desired behavior, like stability Çetinaslan
+[2016], Çetinaslan and Orvalho [2020a,b], sparsity Bouaziz et al. [2013], Neumann et al. [2013], Rackovi´c et al. [2022],
+or temporal smoothness Tena et al. [2011], Seol et al. [2012]. On the other side, data-based solutions can work with
+an arbitrary rig function Song et al. [2020] but demand vast amounts of data for training a good predictor. Common
+models here are Radial Basis Function-based regressors Song et al. [2011], Seol and Lewis [2014], Gaussian Processes
+Regression Holden et al. [2015], Reverdy et al. [2015] and Neural Networks Bailey et al. [2020], Chaudhuri et al.
+[2020]. As a ﬁnal step, the meshes obtained as a solution to the inverse rig problem are combined with albedo maps
+Feng et al. [2021], lighting conditions, and material parameters to render the person-speciﬁc skin details and produce a
+life-like output image Laine et al. [2020], Lombardi et al. [2018], Thies et al. [2018]. The problem of rig inversion is
+the main focus of our paper, and we propose a model-based approach that solves a constrained l1 norm regularized
+non-linear least squares. The algorithm takes into account complex corrective blendshape terms, hence allowing high
+accuracy of the mesh ﬁt, and yet, due to the coordinate descent approach and sparsity regularization, the obtained
+weight vectors have low cardinality making posterior manual adjustments possible.
+Similar to the problem of the inverse rig is that of direct manipulation. However, it demands a real-time solution, since
+it assumes a deformation is propagated while the user is dragging the vertices of a character to adjust a given expression.
+To avoid artifacts that appear when all the non-selected markers in the face are kept ﬁxed, Lewis and Anjyo [2010]
+proposes a general model where controllers are ﬁtted taking into account an arbitrary number of selected manipulators.
+This idea is further developed in Seo et al. [2011], paying special attention to local inﬂuences of blendshapes. Later,
+Çetinaslan and Orvalho [2020a] develops a sketch-based method that leads to more intuitive manipulation, and the
+authors further improve the method in Çetinaslan and Orvalho [2020b].
+4
+
+
+--- PAGE 5 ---
+A PREPRINT
+Another direction of interest in blendshape animation is the segmentation of the face, and there is a number of approaches
+based on the ﬁnal intention for the obtained segments. The main categories here are a localized or distributed approach
+to solving the inverse rig Joshi et al. [2006], Tena et al. [2011], Kei and Tomoyuki [2012], Reverdy et al. [2015],
+Fratarcangeli et al. [2020], Bailey et al. [2020], Rackovi´c et al. [2021], where the mesh segments are in general relatively
+big, and adding secondary motion effects Zoss et al. [2020] to increase the plausibility of already animated characters
+Neumann et al. [2013], Wu et al. [2016], Romeo and Schvartzman [2020], where, in general, one produces a large
+number of very small segments.
+This paper focuses on a model-based approach to solving the inverse rig problem. The animated avatars are highly
+realistic pre-sculpted blendshape models with additional corrections levels. Reference frames are given in the form of
+3D face scans, and an imperative is on the high-accuracy expression reconstruction.
+3
+Proposed Method
+This section introduces our algorithm for an accurate solution to the inverse rig problem for complex blendshape
+models. It is desirable for a solution vector w to be sparse while producing an accurate reconstruction of a given mesh
+bb. Additionally, weights must stay within a [0, 1] interval to respect the construction of animated characters. We pose
+the optimization problem as
+minimize
+0≤w≤1
+1
+2∥f(w) −bb∥2 + α1T w,
+(6)
+with α ≥0 being a regularization parameter. Note that, due to non-negativity constraints on w, the regularization
+term is equal to the l1 norm, which is known as a sparsity-enhancing regularizer. A rig function f(w) is given without
+a subscript because we want a solution that would work with arbitrary complexity of the rig, for example, linear or
+quartic. As the animated characters at our disposal consist of up to three levels of correction, the highest accuracy is
+achieved with a quartic rig deﬁned in (5), hence we give a derivation (and experimental results) for f(w) := fQ(w).
+Nevertheless, we also include the case when f(w) := fL(w), since the linear blendshape model is the one used often in
+the literature. We will refer to the two approaches as Quartic and Linear, respectively.
+For the Quartic case, a non-linearity of the rig makes the problem (6) non-convex and hard to solve if weights w are to
+be estimated jointly. However, we can approach the problem component-wise, and then have a sequence of quadratic
+programs instead. That is, for a controller i ∈{1, ..., m} we assume that all the weights wj, for j ̸= i, are ﬁxed (to
+initial or previously estimated value), while we only need to estimate wi, by solving
+wi ←argmin
+0≤w≤1
+1
+2∥wφi + ψi∥2 + αw.
+(7)
+Here φi ∈R3n is a vector that contains all the blendshape components (i.e., blendshape vector and corrective terms)
+that participate in the product with wi:
+φi = bi +
+X
+{i,j}∈P
+wjb{ij} +
+X
+{i,j,k}∈T
+wjwkb{ijk}+
+X
+{i,j,k,l}∈Q
+wjwkwlb{ijkl};
+(8)
+and ψi ∈R3n contains all the other components, together with a given target mesh bb:
+ψi =
+X
+j̸=i
+wjbj +
+X
+{j,k}∈P
+j,k̸=i
+wjwkb{jk} +
+X
+{j,k,l}∈T
+j,k,l̸=i
+wjwkwlb{jkl}+
+X
+{j,k,l,h}∈Q
+j,k,l,h̸=i
+wjwkwlwhb{jklh} −bb.
+(9)
+The global solution to (7) is found in closed form, by setting the derivative with respect to wi to zero, and projecting to
+the feasible set:
+wi ←P[0,1]
+ 
+φT
+i ψi −α
+∥φi∥2
+!
+,
+(10)
+5
+
+
+--- PAGE 6 ---
+A PREPRINT
+where the projection operator is deﬁned as
+P[0,1](x) =
+
+
+
+0,
+if x < 0,
+1,
+if x > 1,
+x,
+otherwise.
+(11)
+For the Linear case, a coordinate optimization problem analogue to (7) is
+wi ←argmin
+0≤w≤1
+1
+2∥wbi +
+X
+j̸=i
+wjbj −bb∥2 + αw,
+(12)
+with the solution
+wi ←P[0,1]
+ 
+bT
+i (P
+j̸=i wjbj −bb) −α
+∥bi∥2
+!
+.
+(13)
+Notice that (10) and (13) have the same structure and that by setting the corrective blendshape terms of (8) and (9)
+to zero, solution (10) simpliﬁes to (13). This conﬁrms that our approach is general enough to work with an arbitrary
+number of correction levels.
+When the optimal component-wise weights are estimated for all m controllers, the process is repeated until some
+stopping criterion is satisﬁed. This type of iteration is known as coordinate descent, and it is guaranteed to produce
+monotonically non-increasing costs Luo and Tseng [1992], Wright [2015]. In the case when a model is deﬁned via a
+linear rig function (1), the objective (6) consists of a smooth convex function ∥Bw −bb∥2 and a convex and separable
+regularization term 1T w, hence we can claim that our method converges to the optimal solution of (6), as proved in
+Wright [2015]. The pseudo-code of the proposed method is given in Algorithm 1.
+Algorithm 1
+Require: A mesh vector bb ∈R3n, a set of blendshape vectors b1, ..., bm ∈R3n ordered as ∥b1∥2 ≥∥b2∥2 ≥
+· · · ≥∥bm∥2 (we implicitly order blendshape vectors by norm magnitude without loss of generality), regularization
+parameter α ≥0, and the number of iterations T ∈N. If a considered rig function is quartic, include also corrective
+terms b{ij} for {i, j} ∈P, b{ijk} for {i, j, k} ∈T , b{ijkl} for {i, j, k, l} ∈Q.
+Ensure: Optimal weight vector w ∈Rm such that 0 ≤w ≤1.
+Initialize weight vector by w = 0
+for t=1,...,T do
+for i=1,...,m do
+if Rig function is linear then
+wi ←P[0,1]
+
+bT
+i (P
+j̸=i wjbj−bb)−α
+∥bi∥2
+
+else if Rig function is quartic then
+Compute φi from (8) and ψi from (9)
+wi ←P[0,1]
+
+φT
+i ψi−α
+∥φi∥2
+
+end if
+end for
+end for
+Notice that our approach has some similarities with Seol. If one sets α = 0 and removes the upper constraint w ≤1,
+equation (13) becomes equivalent to the Seol update rule from (4). For this reason, we adopt some of the tactics from
+Seol et al. [2011].
+Any feasible vector w ∈Rm can be used for the initialization; however, we stress that by initializing with a non-zero
+weight vector, the method cannot guarantee that mutually exclusive controllers will not get activated simultaneously, as
+explained in Seol et al. [2011].
+In a sequential mesh ﬁtting, the order in which blendshapes are visited plays an important role, so we adapt the strategy
+from Seol et al. [2011] to order them by the overall displacement magnitude:
+∥b1∥2 ≥∥b2∥2 ≥· · · ≥∥bm∥2.
+(14)
+This choice is inspired by the intuition behind the manual process, where an artist tends to ﬁrst set the weights of the
+controllers of more drastic motions (like mouth opening or nose squeezing) before visiting more subtle ones. This has
+6
+
+
+--- PAGE 7 ---
+A PREPRINT
+Ada
+Jesse
+Vivian
+Omar
+Figure 2: Head models available at MetaHuman creator.
+Ada
+Jesse
+Vivian
+Omar
+Char 5
+m
+102
+102
+102
+130
+147
+n
+10000
+10000
+10000
+3746
+2511
+N
+600
+600
+600
+600
+600
+|P|
+185
+185
+185
+187
+160
+|T |
+130
+130
+130
+130
+68
+|Q|
+50
+50
+50
+50
+12
+Table 1: Dimensions of the four animated characters, where m is the number of blendshapes in the basis, n is the
+number of vertices in face mesh, N is the number of test frames, and |P|, |T | and |Q| are the numbers of corrective
+combinations of ﬁrst, second and third order, respectively.
+some similarities with a sparse solution of the matching pursuit problem Mallat and Zhang [1993], yet we will discuss
+alternative strategies for choosing the optimization order in Section 4.4.
+One of the relevant points not discussed in Seol et al. [2011] was the possibility of multiple algorithm passes — the
+authors terminated the process after each controller was visited and updated once. We conclude from the theory on
+coordinate descent and from our experiments that increasing the number of passes leads to a signiﬁcant reduction in
+mesh error at the cost of a slight increase of the solution cardinality.
+In the next section, we show the performance of our algorithm on a set of animated human characters, and benchmark
+against state-of-the-art methods for solving the inverse rig problem. We also give an extensive results analysis and
+discuss the main improvements compared to the baseline Seol approach and alternative strategies for some aspects of
+the algorithm.
+4
+Evaluation
+This section compares the solutions of different approaches on several data sets and gives an extensive discussion of the
+results.
+4.1
+Data
+Experiments are performed over ﬁve animated avatars, four of which are freely available on the MetaHuman Creator1
+— Ada, Jesse, Vivian and Omar, and shown in Figure 2. The ﬁfth character is a proprietary model provided by 3lateral
+studio 2, for the purpose of this research, and we refer to it as Char 5. The size of the head is comparable over
+the characters, with a width (distance from left to right ear) of around 18cm. However, the number of vertices and
+controllers differ, and we give it summarized in Table 1.
+Although it would be ideal to perform experiments on the actual 3D facial scans matching the avatars, such high-ﬁdelity
+data is, in general, costly and only produced for proﬁt applications, and it is not available for researchers. For this
+reason, we will have to restrict ourselves to working with synthetic data, yet we will include noise in our ﬁtting data
+in order to mimic the meshes acquired with a 3D laser scanner or photogrammetry Vasiljevi´c et al. [2021], Cui et al.
+[2010]. In Figure 4, we show a close shoot of Ada with varying amounts of added Gaussian noise Wand et al. [2007],
+Sun et al. [2008]. The top left subﬁgure is a clean mesh, followed by the meshes with the increasing variance of the
+added noise. We notice that with low values, like σ2 = 0.01, the mesh is almost indistinguishable from the clean one,
+1https://www.unrealengine.com/en-US/metahuman
+2https://www.3lateral.com
+7
+
+
+--- PAGE 8 ---
+A PREPRINT
+0.00
+0.01
+0.02
+0.03
+0.05
+0.10
+Figure 3: Face mesh of Ada corrupted with different noise levels. The upper left is the original clean mesh, and each
+other represents a mesh with added Gaussian noise with the standard deviation σ2 corresponding to the value below the
+ﬁgure.
+40
+60
+80
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+RMSE (mean)
+Seol
+0.00
+0.01
+0.10
+40
+60
+80
+Cardinality
+Quartic
+40
+60
+80
+Çetinaslan
+Figure 4: Point-wise predictions for three methods (Seol as proposed in Seol et al. [2011], Quartic proposed in this paper,
+and Çetinaslan from Çetinaslan and Orvalho [2020a]) with respect to different noise levels. Dot colors correspond
+to the standard deviation σ2 ∈{0, 0.01, 0.1} of the added noise, while the dot sizes in Quartic and Çetinaslan are
+proportional to the regularization value α ∈{0, 0.1, 1}.
+while one order higher value gives a mesh that is too corrupted. We chose to work with σ2 = 0.03, as it produces a
+smoothness effect similar to that obtained by modern 3D scanners, yet later in this section, we will also see how varying
+noise levels affect the results of different methods. This noise is only added on the target meshes bb in the process of
+ﬁtting, i.e., solving the inverse rig, while the error for the reconstructed meshes is computed with respect to the original,
+noise-free data.
+In addition to Figure 3, Figure 4 compares the results over training frames for Ada under different noise levels, as
+indicated by the color of the dots, for the proposed method and for two benchmark methods, Seol and Çetinaslan. (See
+Section 4.3 for details on benchmark methods, and Section 4.2 for evaluation metrics.) The results are shown for each
+of 100 data points, and additionally, since Quartic and Çetinaslan demand a value of the regularization parameter α, we
+include choices of α ∈{0, 0.1, 1}, as indicated by the size and opacity of the dots. One can notice that Çetinaslan is
+more affected by the increase of the noise levels — for low values of σ2, it gives the lowest mesh error, while with
+the increase, the error is drastically higher. On the other side, the proposed method is quite robust in this sense, and
+additionally, with an increased value of regularizer parameter α, it leads to a signiﬁcant reduction of the cardinality,
+without visibly affecting the mesh error.
+8
+
+
+--- PAGE 9 ---
+A PREPRINT
+20
+40
+60
+80
+Cardinality
+0.00
+0.01
+0.02
+0.03
+0.04
+0.05
+0.06
+0.07
+Mean RMSE
+Seol-1
+Linear-1
+Quartic-1
+Seol-5
+Linear-5
+Quartic-5
+4
+6
+8
+10
+12
+14
+L1 norm
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+Figure 5: Trade-off between the mesh error and cardinality / L1 norm of the weight vector. A blue star (Seol-1) is
+the solution proposed by Seol et al. [2011]. Adding an l1 regularization term to Seol-1 leads to the results presented
+as blue dots (Linear-1), where dot sizes correspond to a value of regularization parameter α. Further adjustment is
+adding multiple iterations of the algorithm (5 in this case), which is shown in purple, where again a star represents a
+non-regularized case (Seol-5) and dot sizes correspond to the value of α (Linear-5). Analog to Linear-1 and Linear-5
+are Quartic-1 (orange) and Quartic-5 (red) respectively, where the linear rig function (1) is substituted by a quartic (5).
+Gray vertical lines represent the values of the ground-truth data.
+4.2
+Metrics
+The mesh error is an important metric of interest in a realistic face reconstruction. To measure this, we use the root
+mean squared error (RMSE) given by
+RMSE(w) =
+s
+∥fQ(w) −˜b∥2
+n
+,
+(15)
+where fQ(w) is the reconstructed mesh vector and ˜b is a noise-free target mesh. We remind the reader that as an input
+to the algorithms in our experiments, we used meshes corrupted by Gaussian noise, bb = ˜b + ϵ, such that ϵ ∼N(0, σ2),
+and evaluated the results on the clean meshes ˜b. Recall that we work with meshes with thousands of vertices, hence the
+average of the error over all of them might not be able to indicate if the obtained expression resembles the original well
+or not. It is important whether the error is visible, i.e., perceivable by a human, in a reconstructed face, hence it bears
+more signiﬁcance if a small number of vertices gives a large offset than if each vertex in the face is only slightly off.
+To account for this, besides the mean over all the n vertices, we will also show the 95th percentile of the error over
+the mesh vertices. Besides the mesh error, we are also interested in the cardinality of the solution, i.e., the number of
+non-zero weights, since the frames with a large number of activated weights might be unstable and hard to adjust by an
+artist. We will complement this with the l1 norm as well since sometimes it is also used for approximately measuring
+the sparsity of the solution. Finally, since in the animation temporal continuity or smoothness is an important concept,
+we include another metric that measures the temporal roughness of the weight curves. The roughness is inversely
+proportional to the smoothness, and higher values of this metric indicate that the results are less smooth. The metric is
+based on second-order differences Marquis Bolduc and Phan [2022]
+Roughness(wi) =
+T −1
+X
+t=2
+
+w(t−1)
+i
+−2w(t)
+i
++ w(t+1)
+i
+2
+,
+(16)
+where the score of zero is obtained for a constant vector and increases the more the consecutive entries differ. Notice
+that, while the other metrics introduced so far are computed for a single frame (and over the weights or vertices),
+Roughness is computed for a single weight over the frames.
+4.3
+Numerical Results
+All the characters in our experiments have corrective terms and a rig function in the form (5), hence it is reasonable
+to apply our method under the quartic rig function. Nevertheless, we will also include the case when a linear rig
+approximation is used, to show that our method may outperform the others even in the simpliﬁed case, denoting these
+two approaches Quartic and Linear respectively. As a ﬁrst benchmark method, we will use Seol, introduced earlier
+in Section 1. Since there are similarities between the proposed method and Seol, let us ﬁrst examine how the results
+of these two relate. These results are shown in Figure 5. Our method with a linear rig approximation and a single
+9
+
+
+--- PAGE 10 ---
+A PREPRINT
+0.00
+0.01
+0.02
+0.03
+0.04
+0.05
+RMSE (mean)
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+0
+20
+40
+60
+80
+100
+Cardinality
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+RMSE (95th perc.)
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0
+5
+10
+15
+L1 norm
+Figure 6: Trade-off between the mesh error and cardinality / L1 norm of the weight vector for Ada. The top row shows
+the mean mesh error, while the bottom corresponds to the 95th percentile of the error. Dot sizes are proportional to the
+size of the regularization parameter α ranging from 0 to 10, as indicated on the right. The proposed solution with the
+quartic rig function is shown in red (Quartic), and the one with a linear approximation is in blue (Linear). The solution
+proposed by Çetinaslan and Orvalho [2020a] is represented by gray dots (Çetinaslan), where a star (Joshi) corresponds
+to a special case whit no regularization Joshi et al. [2006]. The approach of Rackovi´c et al. [2022] is shown in green
+(LMMM). Gray vertical lines represent the values of the ground-truth data.
+iteration over the weights is denoted with Linear-1 (similarly, a linear model with 5 iterations is denoted Linear-5, and
+in the same analogy we have Quartic-1 and Quartic-5). In the case where the regularization term is set to α = 0, it
+simpliﬁes to Seol, as indicated by a blue star, while for the higher values of α ∈{0.1, 0.2, 0.5, 1, 2, 5, 10}, results are
+presented in blue dots of the corresponding sizes. We see that for low to medium values of α, our method gives a visible
+reduction in cardinality (and l1 norm) compared to Seol, without affecting the mesh error, while for the higher values, a
+trade-off is made between accuracy and sparsity. In this case of a single iteration, the inclusion of corrective terms does
+not seem to have signiﬁcant effects, as the curve of Quartic-1 closely follows Linear-1. On the other side, with the
+increased number of iterations, we see that Quartic-5 gives a lower mesh error than Linear-5 for the same cardinality
+value. However, both these curves are under those of a single iteration, showing a large margin of improvement with
+respect to both axes. A purple star denoted Seol-5 indicates a modiﬁcation of the solution from Seol et al. [2011], where
+the method is iterating through weights ﬁve times (as opposed to Seol-1, which is the solution as proposed in Seol et al.
+[2011]). Seol-5 exhibits more precise mesh ﬁt than Seol-1, yet at the cost of considerable increase in cardinality.
+As opposed to these sequential approaches, in Section 1, we also mentioned a solution proposed by Joshi et al. [2006]
+(Joshi), that solves for all the blendshape weights jointly. While the approach of Joshi is simple and often satisfactory
+for general purposes, we will consider two other methods from the same group that are more recent and might provide
+a better solution. The ﬁrst one we refer to as Çetinaslan, was proposed in Çetinaslan and Orvalho [2020a] as a
+generalization of the Joshi solution. The method includes an l2 squared regularization to problem (2), so a solution is
+obtained by solving a set of linear equations
+(BT B + 2αI)w = BT bb.
+(17)
+The weights are afterward clipped to [0, 1] interval in order to satisfy the constraints. The other approach was proposed
+in Rackovi´c et al. [2022], and to the best of our knowledge, it is the only model-based approach that includes corrective
+terms in the blendshape model when solving the inverse rig. It is, however, restricted to working with only the ﬁrst-level
+corrections (as opposed to our proposed algorithm, which can take any number of corrective levels). The method
+considers the objective function
+minimize
+0≤w≤1
+∥Bw +
+X
+{i,j}∈P
+wiwjb{ij} −bb∥2 + α1T w,
+(18)
+10
+
+
+--- PAGE 11 ---
+A PREPRINT
+0.00
+0.01
+0.02
+0.03
+0.04
+0.05
+RMSE (mean)
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+0
+20
+40
+60
+80
+Cardinality
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+0.14
+0.16
+RMSE (95th perc.)
+0.0
+2.5
+5.0
+7.5
+10.0
+12.5
+L1 norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+Figure 7: Trade-off between the mesh error and cardinality / L1 norm of the weight vector for Jesse. The top row shows
+the mean mesh error, while the bottom corresponds to the 95th percentile of the error. Dot sizes are proportional to the
+size of regularization parameter α ranging from 0 to 10, as indicated on the right.
+0.00
+0.01
+0.02
+0.03
+0.04
+RMSE (mean)
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+0
+20
+40
+60
+80
+Cardinality
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+RMSE (95th perc.)
+0.0
+2.5
+5.0
+7.5
+10.0
+12.5
+L1 norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+Figure 8: Trade-off between the mesh error and cardinality / L1 norm of the weight vector for Vivian. The top row
+shows the mean mesh error, while the bottom corresponds to the 95th percentile of the error. Dot sizes are proportional
+to the size of regularization parameter α ranging from 0 to 10, as indicated on the right.
+and applies Levenberg-Marquard Levenberg [1944], Marquardt [1963] and Majorization-Minimization Hunter and
+Lange [2004] to solve the problem iteratively, hence we refer to this approach as LMMM.
+The ﬁrst three benchmark approaches listed above, Seol, Joshi and Çetinaslan, assume a linear rig function (1) when
+estimating the weights, while LMMM assumes quadratic. Our method is tested with both linear and quartic rig (Linear
+and Quartic respectively). Nevertheless, once the weights are estimated, we use the full quartic rig to reconstruct the
+meshes with all the methods so that the evaluation results are fair.
+11
+
+
+--- PAGE 12 ---
+A PREPRINT
+0.00
+0.01
+0.02
+0.03
+0.04
+0.05
+0.06
+RMSE (mean)
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+0
+25
+50
+75
+100
+125
+Cardinality
+0.000
+0.025
+0.050
+0.075
+0.100
+0.125
+0.150
+0.175
+RMSE (95th perc.)
+0
+5
+10
+15
+L1 norm
+Figure 9: Trade-off between the mesh error and cardinality / L1 norm of the weight vector for Omar. The top row
+shows the mean mesh error, while the bottom corresponds to the 95th percentile of the error. Dot sizes are proportional
+to the size of regularization parameter α ranging from 0 to 10, as indicated on the right.
+Ada
+Jesse
+Vivian
+Omar
+Char 5
+Quartic
+0.5
+1
+0.5
+0.5
+0.5
+Linear
+0.5
+1
+0.5
+0.5
+0.5
+Çetinaslan
+0.2
+0.5
+0.5
+0.5
+0.5
+LMMM
+0.2
+0.5
+0.5
+0.5
+0.5
+Table 2: The selected values of the regularization parameter α for each method and each character.
+In Figure 6, we show results for different methods over the training data for Ada. Except for the Seol and Joshi, all the
+methods include a regularization parameter, hence we need to see how the results behave with varying values of α, as
+indicated by the corresponding sizes of the dots. The top row of the ﬁgure shows the mean mesh error, while the bottom
+gives the 95th percentile of the error. An important aspect to notice is that, even though the proposed method (Quartic
+and Linear) does not reach as low mesh error as it is possible with LMMM or Çetinaslan, it does have a favorable shape
+of the curve — it offers a nice trade-off between accuracy and cardinality. Imposing higher α values in Çetinaslan and
+LMMM increases the mesh error but does not reduce cardinality as much. We can notice a similar behavior for all the
+other animated characters, in Figures 7–10.
+The general conclusions are as follows. Seol produces reasonably low cardinality of w, which is around the same value
+as in artist-crafted reference animation, but relatively high error. LMMM can achieve the lowest mesh error of the ﬁt,
+yet both LMMM and Cetinaslan have higher cardinality, which cannot be signiﬁcantly reduced even with relatively high
+regularization values. The proposed method is the only one that has a good trade-off between mesh error and sparsity of
+the results, which is tuned by choosing the right α value. We further pick the optimal values of α for each method and
+proceed to analyze the results in more detail over the test data. Chosen values for each character/method combination
+are given in Table 2.
+Further, we proceed with the corresponding values and evaluate all the methods over the test data. For the test case,
+we consider animation sequences (see supplementary video materials), which allows us also to estimate the temporal
+smoothness of the results, as explained in Section 4.2. The resulting metric values for Ada are presented in Figure 11,
+and accompanied by Table 3. Figure 11 shows a visible separation between the coordinate descent-based methods
+(Quartic, Linear and Seol) that lead to low cardinality and smooth results, versus methods that estimate the weights
+jointly (Joshi, Çetinaslan and LMMM), which lead to low RMSE but a more dense vector of weights. Notice that our
+method Quartic gives relatively low RMSE, comparable to those of LMMM and Çetinaslan, when observing both the
+mean error and the 95th percentile. At the same time, it gives sparse results, comparable with a less accurate method of
+Seol, and smooth frame-to-frame transitions. The only weak point of our method is the execution time, yet it is still
+12
+
+
+--- PAGE 13 ---
+A PREPRINT
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+RMSE (mean)
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+0
+25
+50
+75
+100
+125
+Cardinality
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+RMSE (95th perc.)
+0
+5
+10
+15
+20
+25
+L1 norm
+Figure 10: Trade-off between the mesh error and cardinality / L1 norm of the weight vector for Char 5. The top row
+shows the mean mesh error, while the bottom corresponds to the 95th percentile of the error. Dot sizes are proportional
+to the size of regularization parameter α ranging from 0 to 10, as indicated on the right.
+RMSE
+mean
+RMSE
+95th
+Card.
+L1
+norm
+Rough.
+Time
+Quartic
+0.015
+0.050
+59.3
+7.68
+0.108
+5.848
+Linear
+0.019
+0.061
+58.1
+7.37
+0.108
+0.361
+Seol
+0.041
+0.120
+55.9
+7.79
+0.092
+0.091
+Joshi
+0.009
+0.034
+74.7
+11.3
+2.838
+0.004
+Çetinaslan
+0.012
+0.044
+74.0
+9.56
+0.583
+0.004
+LMMM
+0.007
+0.021
+80.2
+9.57
+0.567
+14.09
+Table 3: Ada. Average values for each metric and each method, corresponding to Figure 11. The worst score for each
+column is shaded, while the best is highlighted and bold.
+only a third of the time needed for the LMMM solution. In other words, we can cope with more complex models like
+LMMM but with an approximately three times faster solution.
+Figure 1 gives an example frame for Ada, comparing the six methods. The top row shows reconstructed meshes, where
+red tones indicate the regions of higher error. The bottom row shows the corresponding blendshape activation weights
+(sorted by the weights of the reference frame). One can notice that Seol gives a higher reconstruction error, producing a
+completely wrong facial expression. Linear, Joshi and Çetinaslan are better, yet the lower lip is slightly off. Quartic
+and LMMM give very accurate mesh reconstruction, but our method produces a considerably sparser vector of weights
+than LMMM.
+More visual examples are given in Figure 16. For visualization purposes, we excluded Linear and Joshi, as less
+signiﬁcant, and we zoomed in on the mouth regions since that is where most of the visible error is. All the examples
+conﬁrm the previously stated conclusions that Quartic and LMMM lead to an accurate mesh reconstruction, while only
+our method gives an optimal trade-off between the mesh error and the sparsity of the weight vector. At the same time,
+the execution time of the proposed method is three times lower than that of LMMM (the only benchmark without visible
+mesh artifacts), and the value of Roughness metric is drastically lower compared to any of the benchmarks that solve
+the weights jointly.
+In the supplemental video materials, a reader can better grasp the visual differences since the animated sequence is
+represented side-by-side with a reconstruction of each method. The proposed method with quartic rig function, and
+LMMM, give almost ﬂawless reconstructions, while Seol is visibly worse than any of the other methods. An interesting
+aspect to notice in the case of Joshi and Çetinaslan is that they produce a shivering-like effect throughout the entire
+sequence (especially visible in the lips). This aligns with the exhibited high value for roughness in Figure 11, i.e., even
+13
+
+
+--- PAGE 14 ---
+A PREPRINT
+0.00
+0.02
+0.04
+0.06
+0.08
+RMSE (mean)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+0.35
+RMSE (95th perc.)
+0
+20
+40
+60
+80
+100
+Cardinality
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+4
+6
+8
+10
+12
+14
+16
+18
+20
+L1 Norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+1.50
+1.75
+2.00
+Roughness
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+10
+2
+10
+1
+100
+101
+Time
+Figure 11: Results statistics for Ada, over the test animation. Horizontal gray lines indicate the average value of the
+corresponding metric in the ground truth data. Execution times are presented in the log scale. For the exact numerical
+values, consult Table 3.
+RMSE
+mean
+RMSE
+95th
+Card.
+L1
+norm
+Rough.
+Time
+Quartic
+0.025
+0.077
+55.5
+8.45
+0.073
+5.858
+Linear
+0.035
+0.113
+55.6
+8.09
+0.075
+0.358
+Seol
+0.049
+0.147
+55.6
+9.74
+0.082
+0.064
+Joshi
+0.019
+0.074
+73.8
+11.7
+1.846
+0.004
+Çetinaslan
+0.022
+0.082
+72.5
+10.0
+0.289
+0.004
+LMMM
+0.012
+0.039
+79.5
+10.1
+0.280
+14.10
+Table 4: Jesse. Average values for each metric and each method, corresponding to Figure 12. The worst score for each
+column is shaded, while the best is highlighted and bold.
+though individual frames give a relatively good mesh reconstruction, weight activations will differ more signiﬁcantly
+between the consecutive frames. This artifact can also be noticed in LMMM, although it is very subtle and easy to
+oversee. On the other side, our method gives both a good reconstruction in the individual frames and temporally smooth
+animation.
+The other four datasets lead to similar patterns of the results, further conﬁrming the above conclusions. Numerical
+results for Jesse are given in Figure 12 and Table 4, while example frames are in Figures 17 and 18. For Vivian, results
+are in Figure 13 and Table 5, and example frames are in Figures 19 and 20. For Omar, the results are in Figure 14 and
+Table 6, and example frames are in Figures 21 and 22, while for Char 5 the results are in Figure 15 and Table 7. We ask
+readers to look at the supplementary video materials in order to get a better idea of the quality of reconstruction and
+smoothness of the animated sequences.
+4.4
+Order of Component Updates
+As mentioned earlier in the paper, the order of sequential updates will play an important role in the ﬁnal results. A
+strategy that we use is the one proposed in Seol et al. [2011], where the blendshapes are ordered according to the
+magnitude of their offset, as explained in (14). This strategy is inspired by the artist’s intuition since the human animator
+would start editing by ﬁrst adjusting more extreme deformers (i.e., blendshapes with higher displacement magnitude)
+before proceeding to more subtle ones. We refer to this strategy Decreasing magnitude, and compare it with several
+other heuristics. Opposed to that, the blendshapes can be deliberately ordered reverse from (14) to show that it leads
+14
+
+
+--- PAGE 15 ---
+A PREPRINT
+0.01
+0.02
+0.03
+0.04
+0.05
+0.06
+0.07
+0.08
+RMSE (mean)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+RMSE (95th perc.)
+0
+20
+40
+60
+80
+100
+Cardinality
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+4
+6
+8
+10
+12
+14
+16
+18
+L1 Norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+1.6
+Roughness
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+10
+2
+10
+1
+100
+101
+Time
+Figure 12: Results statistics for Jesse, over the test animation. Horizontal gray lines indicate the average value of the
+corresponding metric in the ground truth data. Execution times are presented in the log scale. For the exact numerical
+values, consult Table 4.
+0.02
+0.04
+0.06
+0.08
+RMSE (mean)
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+RMSE (95th perc.)
+0
+20
+40
+60
+80
+100
+Cardinality
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+8
+10
+12
+14
+16
+18
+20
+L1 Norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0.0
+0.5
+1.0
+1.5
+2.0
+2.5
+Roughness
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+10
+2
+10
+1
+100
+101
+Time
+Figure 13: Results statistics for Vivian, over the test animation. Horizontal gray lines indicate the average value of the
+corresponding metric in the ground truth data. Execution times are presented in the log scale. For the exact numerical
+values, consult Table 5.
+15
+
+
+--- PAGE 16 ---
+A PREPRINT
+RMSE
+mean
+RMSE
+95th
+Card.
+L1
+norm
+Rough.
+Time
+Quartic
+0.017
+0.053
+60.6
+10.1
+0.158
+5.865
+Linear
+0.024
+0.071
+60.3
+10.2
+0.161
+0.379
+Seol
+0.050
+0.129
+54.9
+11.2
+0.107
+0.063
+Joshi
+0.019
+0.067
+73.5
+14.4
+2.033
+0.004
+Çetinaslan
+0.022
+0.074
+73.4
+11.8
+0.334
+0.006
+LMMM
+0.013
+0.039
+79.5
+11.9
+0.324
+14.09
+Table 5: Vivian. Average values for each metric and each method, corresponding to Figure 12. The worst score for each
+column is shaded, while the best is highlighted and bold.
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+0.14
+RMSE (mean)
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+RMSE (95th perc.)
+0
+20
+40
+60
+80
+100
+120
+Cardinality
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+5
+10
+15
+20
+25
+L1 Norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0
+1
+2
+3
+4
+Roughness
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+10
+2
+10
+1
+100
+101
+Time
+Figure 14: Results statistics for Omar, over the test animation. Horizontal gray lines indicate the average value of the
+corresponding metric in the ground truth data. Execution times are presented in the log scale. For the exact numerical
+values, consult Table 6.
+RMSE
+mean
+RMSE
+95th
+Card.
+L1
+norm
+Rough.
+Time
+Quartic
+0.023
+0.065
+66.8
+8.68
+0.432
+7.714
+Linear
+0.035
+0.116
+67.9
+8.22
+0.395
+0.404
+Seol
+0.054
+0.160
+74.2
+10.1
+0.384
+0.074
+Joshi
+0.028
+0.113
+87.6
+11.1
+4.128
+0.004
+Çetinaslan
+0.027
+0.103
+88.7
+8.97
+0.513
+0.005
+LMMM
+0.013
+0.040
+100.
+9.16
+0.509
+15.94
+Table 6: Omar. Average values for each metric and each method, corresponding to Figure 14. The worst score for each
+column is shaded, while the best is highlighted and bold.
+RMSE
+mean
+RMSE
+95th
+Card.
+L1
+norm
+Rough.
+Time
+Quartic
+0.027
+0.082
+53.6
+7.85
+0.260
+1.413
+Linear
+0.031
+0.096
+53.8
+7.59
+0.228
+0.072
+Seol
+0.040
+0.110
+89.1
+15.1
+1.536
+0.011
+Joshi
+0.015
+0.065
+108.
+22.0
+15.40
+0.004
+Çetinaslan
+0.023
+0.097
+107.
+11.5
+0.564
+0.003
+LMMM
+0.017
+0.057
+108.
+11.6
+0.546
+4.041
+Table 7: Char 5. Average values for each metric and each method, corresponding to Figure 15. The worst score for
+each column is shaded, while the best is highlighted and bold.
+16
+
+
+--- PAGE 17 ---
+A PREPRINT
+0.01
+0.02
+0.03
+0.04
+0.05
+0.06
+0.07
+RMSE (mean)
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+RMSE (95th perc.)
+0
+20
+40
+60
+80
+100
+120
+140
+Cardinality
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+5
+10
+15
+20
+25
+30
+35
+L1 Norm
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+0
+5
+10
+15
+20
+Roughness
+Quartic
+Linear
+Seol
+Joshi
+Çetinaslan
+LMMM
+10
+2
+10
+1
+100
+Time
+Figure 15: Results statistics for Char 5, over the test animation. Horizontal gray lines indicate the average value of the
+corresponding metric in the ground truth data. Execution times are presented in the log scale. For the exact numerical
+values, consult Table 7.
+ Cardinality: 63
+ Cardinality: 65 
+ RMSE:  0.10
+ Cardinality: 45 
+ RMSE:  0.65
+ Cardinality: 81 
+ RMSE:  0.22
+ Cardinality: 81 
+ RMSE:  0.10
+ Cardinality: 59
+ Cardinality: 61 
+ RMSE:  0.06
+ Cardinality: 60 
+ RMSE:  0.14
+ Cardinality: 73 
+ RMSE:  0.06
+ Cardinality: 80 
+ RMSE:  0.02
+ Cardinality: 59
+ Cardinality: 60 
+ RMSE:  0.09
+ Cardinality: 61 
+ RMSE:  0.22
+ Cardinality: 75 
+ RMSE:  0.11
+ Cardinality: 86 
+ RMSE:  0.03
+Reference Quartic (ours)
+Seol
+Çetinaslan
+LMMM
+.66
+.00
+.15
+.00
+.22
+.00
+Figure 16: Ada, example frames with predictions using different methods. The odd rows show mesh reconstructions,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The even rows show
+corresponding blendshape weights activations, with summarized root mean squared error and cardinality of each
+approach.
+17
+
+
+--- PAGE 18 ---
+A PREPRINT
+ Cardinality: 59
+ Cardinality: 56 
+ RMSE:  0.14
+ Cardinality: 59 
+ RMSE:  0.42
+ Cardinality: 60 
+ RMSE:  0.42
+ Cardinality: 67 
+ RMSE:  0.26
+ Cardinality: 66 
+ RMSE:  0.28
+ Cardinality: 75 
+ RMSE:  0.11
+Reference
+Quartic (ours)
+Linear (ours)
+Seol
+Joshi
+Çetinaslan
+LMMM
+.43
+.00
+cm
+Figure 17: Jesse, an example frame with predictions using different methods. The top row shows a mesh reconstruction,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The bottom row
+shows corresponding blendshape weights activation, with summarized root mean squared error and cardinality of each
+approach.
+ Cardinality: 57
+ Cardinality: 60 
+ RMSE:  0.12
+ Cardinality: 56 
+ RMSE:  0.34
+ Cardinality: 72 
+ RMSE:  0.26
+ Cardinality: 80 
+ RMSE:  0.09
+ Cardinality: 84
+ Cardinality: 56 
+ RMSE:  0.12
+ Cardinality: 53 
+ RMSE:  0.28
+ Cardinality: 83 
+ RMSE:  0.17
+ Cardinality: 85 
+ RMSE:  0.08
+ Cardinality: 59
+ Cardinality: 60 
+ RMSE:  0.10
+ Cardinality: 53 
+ RMSE:  0.23
+ Cardinality: 64 
+ RMSE:  0.13
+ Cardinality: 80 
+ RMSE:  0.08
+Reference Quartic (ours)
+Seol
+Çetinaslan
+LMMM
+.39
+.00
+.28
+.00
+.24
+.00
+Figure 18: Jesse, example frames with predictions using different methods. The odd rows show mesh reconstructions,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The even rows show
+corresponding blendshape weights activations, with summarized root mean squared error and cardinality of each
+approach.
+18
+
+
+--- PAGE 19 ---
+A PREPRINT
+ Cardinality: 53
+ Cardinality: 61 
+ RMSE:  0.11
+ Cardinality: 58 
+ RMSE:  0.26
+ Cardinality: 56 
+ RMSE:  0.31
+ Cardinality: 63 
+ RMSE:  0.40
+ Cardinality: 64 
+ RMSE:  0.38
+ Cardinality: 81 
+ RMSE:  0.13
+Reference
+Quartic (ours)
+Linear (ours)
+Seol
+Joshi
+Çetinaslan
+LMMM
+.40
+.00
+cm
+Figure 19: Vivian, an example frame with predictions using different methods. The top row shows a mesh reconstruction,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The bottom row shows
+corresponding blendshape weights activation, with summarized root mean squared error and cardinality of each
+approach.
+ Cardinality: 58
+ Cardinality: 59 
+ RMSE:  0.06
+ Cardinality: 54 
+ RMSE:  0.12
+ Cardinality: 75 
+ RMSE:  0.23
+ Cardinality: 79 
+ RMSE:  0.07
+ Cardinality: 82
+ Cardinality: 63 
+ RMSE:  0.07
+ Cardinality: 52 
+ RMSE:  0.32
+ Cardinality: 75 
+ RMSE:  0.19
+ Cardinality: 79 
+ RMSE:  0.11
+ Cardinality: 54
+ Cardinality: 60 
+ RMSE:  0.10
+ Cardinality: 55 
+ RMSE:  0.23
+ Cardinality: 67 
+ RMSE:  0.22
+ Cardinality: 81 
+ RMSE:  0.08
+Reference Quartic (ours)
+Seol
+Çetinaslan
+LMMM
+.23
+.00
+.32
+.00
+.26
+.00
+Figure 20: Vivian, example frames with predictions using different methods. The odd rows show mesh reconstructions,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The even rows show
+corresponding blendshape weights activations, with summarized root mean squared error and cardinality of each
+approach.
+19
+
+
+--- PAGE 20 ---
+A PREPRINT
+ Cardinality: 76
+ Cardinality: 64 
+ RMSE:  0.11
+ Cardinality: 61 
+ RMSE:  0.20
+ Cardinality: 67 
+ RMSE:  0.27
+ Cardinality: 75 
+ RMSE:  0.29
+ Cardinality: 81 
+ RMSE:  0.27
+ Cardinality: 98 
+ RMSE:  0.07
+Reference
+Quartic (ours)
+Linear (ours)
+Seol
+Joshi
+Çetinaslan
+LMMM
+.30
+.00
+cm
+Figure 21: Omar, an example frame with predictions using different methods. The top row shows a mesh reconstruction,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The bottom row
+shows corresponding blendshape weights activation, with summarized root mean squared error and cardinality of each
+approach.
+ Cardinality: 81
+ Cardinality: 50 
+ RMSE:  0.09
+ Cardinality: 52 
+ RMSE:  0.23
+ Cardinality: 69 
+ RMSE:  0.11
+ Cardinality: 88 
+ RMSE:  0.05
+ Cardinality: 85
+ Cardinality: 66 
+ RMSE:  0.11
+ Cardinality: 72 
+ RMSE:  0.31
+ Cardinality: 90 
+ RMSE:  0.34
+ Cardinality: 102 
+ RMSE:  0.06
+ Cardinality: 87
+ Cardinality: 69 
+ RMSE:  0.16
+ Cardinality: 72 
+ RMSE:  0.38
+ Cardinality: 90 
+ RMSE:  0.23
+ Cardinality: 104 
+ RMSE:  0.05
+Reference Quartic (ours)
+Seol
+Çetinaslan
+LMMM
+.24
+.00
+.39
+.00
+.39
+.00
+Figure 22: Omar, example frames with predictions using different methods. The odd rows show mesh reconstructions,
+and regions of higher mesh error are highlighted in red, according to the color bar on the right. The even rows show
+corresponding blendshape weights activations, with summarized root mean squared error and cardinality of each
+approach.
+20
+
+
+--- PAGE 21 ---
+A PREPRINT
+0
+20
+40
+60
+80
+100
+Cardinality
+0.00
+0.01
+0.02
+0.03
+0.04
+0.05
+0.06
+RMSE (mean)
+0
+5
+10
+15
+20
+L1 norm
+Decreasing magn.
+Random ord.
+Increasing magn.
+Frame corr.
+Iteration corr.
+Max. improvement
+Gauss-South.
+0
+0.1
+0.2
+0.5
+1
+2
+5
+10
+Figure 23: Trade-off between the mesh error and cardinality / L1 norm of the weight vector for different ordering of the
+updates for Quadratic method (Ada).
+to poor results — we denote this Increasing magnitude. Finally, another simple solution is to order the deformers
+randomly (Random ordering).
+We can also resort to the other tactics that incur a bit higher computational cost (since the order vector needs to be
+estimated for each frame independently) but might be expected to give a more favorable solution in terms of the objective
+function. At ﬁrst, we consider the strategy of Matching Pursuit Mallat and Zhang [1993], where the components are
+ranked based on the correlation with the target vector. In this sense, we can compute the correlation between each
+blendshape with the target mesh bb, and then proceed following that order when ﬁtting the corresponding frame. We call
+this Frame correlation. The other approach is to recompute correlations after each update, that is, when we choose the
+blendshape with the highest correlation with the target, we estimate its activation weight using (10), and then recompute
+the correlations, repeating the process using the updated residual instead of the target mesh. We denote this Iteration
+correlation, and notice that this takes m times more correlation computations per iteration than Frame correlation.
+Another possibility is to use Gauss-Southwell update rule Nutini et al. [2015, 2017], which chooses the coordinate
+whose derivative at the given point has the largest magnitude. Since we are solving a constrained problem, we need to
+exclude the candidate weights wi that have values 0 or 1, such that the gradient indicates unfeasible directions. Finally,
+we can choose the next component based on the reduction in the objective function, and we will denote it Maximum
+improvement. The idea is to solve (10) for each weight wi independently and estimate what would be the value of the
+cost function (6) for each of the updates. Then, we keep only the weight that leads to the biggest decrease of (6) and
+discard all the others. After updating the corresponding weight component, we repeat the process until convergence.
+The last two approaches might be better than the previous ones in terms of solution ﬁt and sparsity, but they are wasteful
+in terms of computational costs.
+The trade-off curves for six variants for Ada are presented in Figure 23. The proposed method of Decreasing magnitude
+has a similar trade-off curve as that of Frame correlation, while Increasing magnitude and Random ordering show both
+higher error and higher cardinality. Iteration correlation leads to slightly lower cardinality at the cost of increased
+mesh error, while it seems that the Maximum improvement approach outperforms the others, while Gauss-Southwell
+partly overlaps with it; but without offering as low RMSE in case of lower regularization. We choose the same value
+of a regularization parameter α = 0.5 for all six cases and proceed with the test data. The results are given in Figure
+24 and Table 8. Maximum improvement shows great results in terms of both mesh error and cardinality, however, it
+is drastically slower than the other methods. The wasteful computations and function evaluations of this approach
+lead to execution time that is 15 times longer than most other approaches, which makes it unsuitable for practical use.
+This aspect is similar for Gauss-Southwell, while it also yields a relatively high mesh error. The proposed approach of
+Decreasing magnitude is performing relatively well in each aspect, which conﬁrms that it is a good heuristic for this
+problem. Frame correlation behaves similarly to Decreasing magnitude — the main difference is in terms of temporal
+smoothness, where Decreasing magnitude performs better. Random ordering is much worse in terms of temporal
+smoothness than any other approach. This comes as no surprise since, at each frame, the algorithm follows an arbitrary
+ranking in the ﬁtting phase, hence, even if the individual meshes ﬁt relatively accurately, the consecutive frames will
+be semantically different. Increasing magnitude leads to a bit higher error, but it still gives smooth results, since the
+controllers are always visited in the same order. Finally, Iteration correlation performs poorly in both mesh error and
+temporal smoothness, even though the produced weight vectors are sparse.
+We can also conﬁrm these conclusions by visually inspecting an example frame in Figure 25. Iteration correlation gives
+the highest mesh error, with red tones all around the surface, and visible misﬁts in the mouth region. Random ordering
+and Increasing magnitude are slightly better, but the shape of the lips is still different from the reference frame. The
+21
+
+
+--- PAGE 22 ---
+A PREPRINT
+0.01
+0.02
+0.03
+0.04
+RMSE (mean)
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+0.14
+RMSE (95th perc.)
+0
+20
+40
+60
+80
+100
+Cardinality
+Decreasing magn.
+Random ord.
+Increasing magn.
+Frame corr.
+Iteration corr.
+Max.Improvement
+Gauss-South
+5
+10
+15
+20
+L1 Norm
+Decreasing magn.
+Random ord.
+Increasing magn.
+Frame corr.
+Iteration corr.
+Max.Improvement
+Gauss-South
+0
+10
+20
+30
+40
+50
+60
+Roughness
+Decreasing magn.
+Random ord.
+Increasing magn.
+Frame corr.
+Iteration corr.
+Max.Improvement
+Gauss-South
+101
+102
+Time
+Figure 24: Results statistics for Ada for different ordering approaches, over the test animation. Horizontal gray lines
+indicate the average value of the corresponding metric in the ground truth data. Execution times are presented in the log
+scale. For the exact numerical values, consult Table 8.
+RMSE
+mean
+RMSE
+95th
+Card.
+L1
+norm
+Rough.
+Time
+Decreasing
+magn.
+0.015
+0.050
+59.3
+7.68
+0.108
+5.847
+Random
+ord.
+0.018
+0.058
+57.3
+9.40
+22.01
+5.867
+Increasing
+magn.
+0.019
+0.061
+58.2
+11.0
+0.160
+5.839
+Frame
+corr.
+0.014
+0.043
+55.0
+7.48
+0.456
+5.439
+Iteration
+corr.
+0.026
+0.072
+27.3
+6.84
+4.930
+2.654
+Maximum
+Improvement
+0.014
+0.041
+32.9
+6.65
+1.848
+91.241
+Gauss
+Southwell
+0.022
+0.061
+24.5
+4.71
+0.772
+119.
+Table 8: Ada. Average values for each metric for different ordering rules, corresponding to Figure 24. The worst score
+for each column is shaded, while the best is highlighted and bold.
+22
+
+
+--- PAGE 23 ---
+A PREPRINT
+ Cardinality: 59
+ Cardinality: 59 
+ RMSE:  0.10
+ Cardinality: 60 
+ RMSE:  0.16
+ Cardinality: 61 
+ RMSE:  0.11
+ Cardinality: 60 
+ RMSE:  0.10
+ Cardinality: 22 
+ RMSE:  0.17
+ Cardinality: 33 
+ RMSE:  0.05
+ Cardinality: 20 
+ RMSE:  0.13
+Reference
+Decreasing
+magnitude
+Random
+order
+Increasing
+magnitude
+Frame
+Correlation
+Iteration
+Correlation
+Maximum
+Improvement
+Gauss
+Southwell
+.17
+.00
+cm
+Figure 25: Ada, an example frame with predictions using different ordering techniques. The top row shows a mesh
+reconstruction, and regions of higher mesh error are highlighted in red, according to the color bar on the right. The
+bottom row shows corresponding blendshape weights activation, with summarized root mean squared error and
+cardinality of each approach.
+other four approaches give good reconstruction, with Maximum improvement and Gauss-Southwell having far sparser
+weight vectors than the rest.
+5
+Conclusion
+The method proposed in this paper addresses the inverse rig problem in a coordinate descent manner, using complex
+nonlinear blendshape models. Our coordinate descent-based method is general enough to work with different levels of
+corrections or even with a linear rig function. Numerical experiments performed over several datasets show that the
+proposed method outperforms the state-of-the-art model-based solutions based on the trade-off between mesh error
+and cardinality of the weight vector, even in the case when using a linear approximation of the rig. Visual inspection
+further conﬁrms that our method produces a higher-ﬁdelity reconstruction of the original mesh and that it produces
+a correct facial expression even when the other methods fail. The sequential update rule that is applied implies that
+our algorithm will not activate mutually exclusive controllers and hence avoid one of the main causes of the instability
+of a solution. In this respect, the proposed method is somewhat similar to Seol Seol et al. [2011], yet it is superior in
+the accuracy of the reconstructed meshes. On the other side, LMMM Rackovi´c et al. [2022] gives a high-ﬁdelity mesh
+reconstruction that sometimes outperforms that of our algorithm, yet it suffers from a high cardinality, similar to Joshi
+Joshi et al. [2006] and Çetinaslan Çetinaslan and Orvalho [2020a]. For this reason, it is often susceptible to artifacts in
+the reconstructed meshes and might be hard or impossible to manually adjust later, as opposed to our method. Besides
+the optimal tradeoff between the mesh error and sparsity of the weights produced by our method, we have seen that our
+method is three times faster than LMMM (the only baseline with comparable mesh reconstruction accuracy) and the
+resulting animation sequences are visibly more smooth. For all these reasons, our method is a favorable approach in the
+production of close-shot facial animation, where high accuracy of expression cloning is crucial.
+Supplemental Materials
+Supplementary video materials are available at https://youtu.be/Kw4wV24-04c for Ada, https://youtu.be/
+GLQilLJVI_Q for Jesse, https://youtu.be/1mU6L8MoN4U for Omar, and https://youtu.be/Lo-enH0rfyQ for
+Vivian. For each character we present a reference animation on the left, and a mirrored estimate by different method.
+Further, the gray bar-plots on the left correspond to weight activations in the reference animation, and the green ones on
+the right to the estimated solutions.
+Funding
+This work has received funding from the European Union’s Horizon 2020 research and innovation program under
+the Marie Skłodowska-Curie grant agreement No. 812912, from FCT IP strategic project NOVA LINCS (FCT
+UIDB/04516/2020) and project DSAIPA/AI/0087/2018. The work has also been supported in part by the Ministry of
+Education, Science and Technological Development of the Republic of Serbia (Grant No. 451-03-9/2021-14/200125).
+23
+
+
+--- PAGE 24 ---
+A PREPRINT
+References
+Yeongho Seol, Jaewoo Seo, Paul Hyunjin Kim, J. P. Lewis, and Junyong Noh. Artist friendly facial animation
+retargeting. In Proceedings of the 2011 SIGGRAPH Asia Conference. Association for Computing Machinery, 2011.
+doi:https://doi.org/10.1145/2024156.2024196.
+Pushkar Joshi, Wen C Tien, Mathieu Desbrun, and Frédéric Pighin. Learning controls for blend shape based realistic
+facial animation. In ACM SIGGRAPH 2006 Courses, pages 17–es. 2006.
+Ozan Çetinaslan and Veronica Orvalho. Sketching manipulators for localized blendshape editing. Graphical Models,
+108:101059, 2020a. doi:https://doi.org/10.1016/j.gmod.2020.101059.
+Stevo Rackovi´c, Cláudia Soares, Dušan Jakoveti´c, and Zoranka Desnica. A majorization-minimization based method
+for nonconvex inverse rig problems in facial animation: Algorithm derivation. arXiv preprint arXiv:2205.04289,
+2022.
+John P Lewis, Ken Anjyo, Taehyun Rhee, Mengjie Zhang, Frederic H Pighin, and Zhigang Deng. Practice and theory
+of blendshape facial models. Eurographics (State of the Art Reports), 1(8):2, 2014.
+J.P. Lewis and Ken-ichi Anjyo. Direct manipulation blendshapes. IEEE Computer Graphics and Applications, 30(04):
+42–50, 2010. doi:https://doi.org/10.1109/MCG.2010.41.
+Byoungwon Choe and Hyeong-Seok Ko. Analysis and synthesis of facial expressions with hand-generated muscle
+actuation basis. In ACM SIGGRAPH 2006 Courses. 2006. doi:https://doi.org/10.1145/1198555.1198595.
+Ko-Yun Liu, Wan-Chun Ma, Jackson Lee, Chuan-Chang Wang, and Chun-Fa Chang. Localized optimization for
+mocap-driven blendshapes. In SCA 2010, 2010.
+Ozan Çetinaslan. Position Manipulation Techniques for Facial Animation. PhD thesis, Faculdade de Ciencias da
+Universidade do Porto, 2016.
+Roger Blanco i Ribera, Eduard Zell, J. P. Lewis, Junyong Noh, and Mario Botsch. Facial retargeting with automatic
+range of motion alignment. ACM Trans. Graph., 36(4), 2017. doi:https://doi.org/10.1145/3072959.3073674.
+David AB Hyde, Michael Bao, and Ronald Fedkiw. On obtaining sparse semantic solutions for inverse problems,
+control, and neural network training. Journal of Computational Physics, 443:110498, 2021.
+Jaewoo Seo, Geoffrey Irving, J. P. Lewis, and Junyong Noh. Compression and direct manipulation of complex
+blendshape models. ACM Trans. Graph., 30(6):1–10, dec 2011. doi:https://doi.org/10.1145/2070781.2024198.
+Chenglei Wu, Takaaki Shiratori, and Yaser Sheikh. Deep incremental learning for efﬁcient high-ﬁdelity face tracking.
+ACM Trans. Graph., 37(6):1–12, 2018. doi:https://doi.org/10.1145/3272127.3275101.
+Eftychios Sifakis, Igor Neverov, and Ronald Fedkiw. Automatic determination of facial muscle activations from sparse
+motion capture marker data. In ACM SIGGRAPH 2005 Papers, page 417–425. Association for Computing Machinery,
+2005. doi:https://doi.org/10.1145/1186822.1073208.
+Alexandru-Eugen Ichim, Petr Kadleˇcek, Ladislav Kavan, and Mark Pauly. Phace: Physics-based face modeling and
+animation. ACM Trans. Graph., 36(4), 2017. ISSN 0730-0301. doi:https://doi.org/10.1145/3072959.3073664.
+Frédéric Pighin, Jamie Hecker, Dani Lischinski, Richard Szeliski, and David H. Salesin.
+Synthesizing realis-
+tic facial expressions from photographs. In Proceedings of the 25th Annual Conference on Computer Graph-
+ics and Interactive Techniques, SIGGRAPH ’98, page 75–84. Association for Computing Machinery, 1998.
+doi:https://doi.org/10.1145/280814.280825.
+Byoungwon Choe, Hanook Lee, and Hyeong-Seok Ko. Performance-driven muscle-based facial animation. The Journal
+of Visualization and Computer Animation, 12(2):67–79, 2001. doi:https://doi.org/10.1002/vis.246.
+Zhigang Deng, Pei-Ying Chiang, Pamela Fox, and Ulrich Neumann. Animating blendshape faces by cross-mapping
+motion capture data. In Proceedings of the 2006 Symposium on Interactive 3D Graphics and Games, page 43–48.
+Association for Computing Machinery, 2006. doi:https://doi.org/10.1145/1111411.1111419.
+Soﬁen Bouaziz, Yangang Wang, and Mark Pauly. Online modeling for realtime facial animation. ACM Trans. Graph.,
+32(4), 2013. doi:https://doi.org/10.1145/2461912.2461976.
+Lucio Moser, Chinyu Chien, Mark Williams, Jose Serra, Darren Hendler, and Doug Roble. Semi-supervised video-driven
+facial animation transfer for production. ACM Trans. Graph., 40(6):1–18, 2021.
+Hao Li, Thibaut Weise, and Mark Pauly. Example-based facial rigging. ACM Trans. Graph., 29(4):1–6, 2010.
+doi:https://doi.org/10.1145/1778765.1778769.
+Hao Li, Jihun Yu, Yuting Ye, and Chris Bregler. Realtime facial animation with on-the-ﬂy correctives. ACM Trans.
+Graph., 32(4):42–1, 2013. doi:https://doi.org/10.1145/2461912.2462019.
+24
+
+
+--- PAGE 25 ---
+A PREPRINT
+Bindita Chaudhuri, Noranart Vesdapunt, Linda Shapiro, and Baoyuan Wang. Personalized face modeling for improved
+face reconstruction and motion retargeting. In European Conference on Computer Vision, pages 142–160. Springer,
+2020. doi:https://doi.org/10.1007/978-3-030-58558-7_9.
+Ozan Çetinaslan and Veronica Orvalho. Stabilized blendshape editing using localized jacobian transpose descent.
+Graphical Models, 112:101091, 2020b. doi:https://doi.org/10.1016/j.gmod.2020.101091.
+Thomas
+Neumann,
+Kiran
+Varanasi,
+Stephan
+Wenger,
+Markus
+Wacker,
+Marcus
+Magnor,
+and
+Chris-
+tian Theobalt.
+Sparse localized deformation components.
+ACM Trans. Graph., 32(6):1–10, 2013.
+doi:https://doi.org/10.1145/2508363.2508417.
+J. Rafael Tena, Fernando De la Torre, and Iain Matthews. Interactive region-based linear 3D face models. In ACM SIG-
+GRAPH 2011 Papers. Association for Computing Machinery, 2011. doi:https://doi.org/10.1145/1964921.1964971.
+Yeongho Seol, J.P. Lewis, Jaewoo Seo, Byungkuk Choi, Ken Anjyo, and Junyong Noh. Spacetime expression cloning
+for blendshapes. ACM Trans. Graph., 31(2), 2012. doi:https://doi.org/10.1145/2159516.2159519.
+Steven L. Song, Weiqi Shi, and Michael Reed. Accurate face rig approximation with deep differential subspace
+reconstruction. ACM Trans. Graph., 39, 2020. doi:https://doi.org/10.1145/3386569.3392491.
+Jaewon Song, Byungkuk Choi, Yeongho Seol, and Jun yong Noh. Characteristic facial retargeting. Computer Animation
+and Virtual Worlds, 22, 2011. doi:https://doi.org/10.1002/cav.414.
+Yeongho Seol and J. P. Lewis. Tuning facial animation in a mocap pipeline. In ACM SIGGRAPH 2014 Talks,
+SIGGRAPH ’14. Association for Computing Machinery, 2014. doi:https://doi.org/10.1145/2614106.2614108.
+Daniel Holden, Jun Saito, and Taku Komura. Learning an inverse rig mapping for character animation. In Pro-
+ceedings of the 14th ACM SIGGRAPH/Eurographics Symposium on Computer Animation, pages 165–173, 2015.
+doi:https://doi.org/10.1145/2786784.2786788.
+Clément Reverdy, Sylvie Gibet, and Caroline Larboulette. Optimal marker set for motion capture of dynamical facial
+expressions. In Proceedings of the 8th ACM SIGGRAPH Conference on Motion in Games, page 31–36. Association
+for Computing Machinery, 2015. doi:https://doi.org/10.1145/2822013.2822042.
+Stephen W. Bailey, Dalton Omens, Paul Dilorenzo, and James F. O’Brien. Fast and deep facial deformations. ACM
+Trans. Graph., 39(4), 2020. doi:https://doi.org/10.1145/3386569.3392397.
+Yao Feng, Haiwen Feng, Michael J. Black, and Timo Bolkart. Learning an animatable detailed 3d face model from
+in-the-wild images. ACM Trans. Graph., 40(4):1–13, 2021. doi:https://doi.org/10.1145/3450626.3459936.
+Samuli Laine, Janne Hellsten, Tero Karras, Yeongho Seol, Jaakko Lehtinen, and Timo Aila.
+Mod-
+ular primitives for high-performance differentiable rendering.
+ACM Trans. Graph., 39(6):1–14, 2020.
+doi:https://doi.org/10.1145/3414685.3417861.
+Stephen Lombardi, Jason Saragih, Tomas Simon, and Yaser Sheikh. Deep appearance models for face rendering. ACM
+Trans. Graph., 37(4):1–13, 2018. doi:https://doi.org/10.1145/3197517.3201401.
+Justus
+Thies,
+Michael
+Zollhöfer,
+Christian
+Theobalt,
+Marc
+Stamminger,
+and
+Matthias
+Nießner.
+Headon:
+Real-time reenactment of human portrait videos.
+ACM Trans. Graph., 37(4):1–13, 2018.
+doi:https://dl.acm.org/doi/10.1145/3197517.3201350.
+Hirose Kei and Higuchi Tomoyuki. Creating facial animation of characters via mocap data. Journal of Applied Statistics,
+39(12):2583–2597, 2012. doi:https://doi.org/10.1080/02664763.2012.724391.
+Marco Fratarcangeli, Derek Bradley, Aurel Gruber, Gaspard Zoss, and Thabo Beeler. Fast nonlinear least squares
+optimization of large-scale semi-sparse problems. In Computer Graphics Forum, volume 39, pages 247–259. Wiley
+Online Library, 2020.
+Stevo Rackovi´c, Cláudia Soares, Dušan Jakoveti´c, Zoranka Desnica, and Relja Ljubobratovi´c. Clustering of the
+blendshape facial model. In 2021 29th European Signal Processing Conference (EUSIPCO), pages 1556–1560.
+IEEE, 2021.
+Gaspard Zoss, Eftychios Sifakis, Markus Gross, Thabo Beeler, and Derek Bradley. Data-driven extraction and
+composition of secondary dynamics in facial performance capture. ACM Trans. Graph., 39(4):107–1, 2020.
+Chenglei Wu, Derek Bradley, Markus Gross, and Thabo Beeler. An anatomically-constrained local deformation model
+for monocular face capture. ACM Trans. Graph., 35(4):1–12, 2016.
+Marco Romeo and S. Schvartzman. Data-driven facial simulation. In Computer Graphics Forum, volume 39, pages
+513–526. Wiley Online Library, 2020. doi:https://doi.org/10.1111/cgf.14089.
+Zhi-Quan Luo and Paul Tseng. On the convergence of the coordinate descent method for convex differentiable
+minimization. Journal of Optimization Theory and Applications, 72(1):7–35, 1992.
+25
+
+
+--- PAGE 26 ---
+A PREPRINT
+Stephen J Wright. Coordinate descent algorithms. Mathematical Programming, 151(1):3–34, 2015.
+Stéphane G Mallat and Zhifeng Zhang. Matching pursuits with time-frequency dictionaries. IEEE Transactions on
+signal processing, 41(12):3397–3415, 1993.
+Ivana Vasiljevi´c, Ratko Obradovi´c, Isidora Ðuri´c, Branislav Popkonstantinovi´c, Igor Budak, Luka Kuli´c, and Zoran
+Milojevi´c. Copyright protection of 3d digitized artistic sculptures by adding unique local inconspicuous errors by
+sculptors. Applied Sciences, 11(16):7481, 2021.
+Yan Cui, Sebastian Schuon, Derek Chan, Sebastian Thrun, and Christian Theobalt. 3d shape scanning with a time-
+of-ﬂight camera. In 2010 IEEE Computer Society Conference on Computer Vision and Pattern Recognition, pages
+1173–1180. IEEE, 2010.
+Michael Wand, Philipp Jenke, Qixing Huang, Martin Bokeloh, Leonidas Guibas, and Andreas Schilling. Reconstruction
+of deforming geometry from time-varying point clouds. In Symposium on Geometry processing, pages 49–58, 2007.
+Xianfang Sun, Paul L Rosin, Ralph R Martin, and Frank C Langbein. Noise in 3d laser range scanner data. In 2008
+IEEE International Conference on Shape Modeling and Applications, pages 37–45. IEEE, 2008.
+Mathieu Marquis Bolduc and Hau Nghiep Phan. Rig inversion by training a differentiable rig function. In SIGGRAPH
+Asia 2022 Technical Communications, pages 1–4. 2022.
+Kenneth Levenberg. A method for the solution of certain non – linear problems in least squares. Quarterly of Applied
+Mathematics, 2:164–168, 1944.
+Donald W Marquardt. An algorithm for least-squares estimation of nonlinear parameters. Journal of the Society for
+Industrial and Applied Mathematics, 11(2):431–441, 1963.
+David R Hunter and Kenneth Lange. A tutorial on MM algorithms. The American Statistician, 58(1):30–37, 2004.
+Julie Nutini, Mark Schmidt, Issam Laradji, Michael Friedlander, and Hoyt Koepke. Coordinate descent converges
+faster with the gauss-southwell rule than random selection. In International Conference on Machine Learning, pages
+1632–1641. PMLR, 2015.
+Julie Nutini, Issam Laradji, and Mark Schmidt. Let’s make block coordinate descent go fast: Faster greedy rules,
+message-passing, active-set complexity, and superlinear convergence. arXiv preprint arXiv:1712.08859, 2017.
+26

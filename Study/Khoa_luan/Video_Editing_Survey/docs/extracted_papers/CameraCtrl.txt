@@ -1,0 +1,883 @@
+Title: Live Content
+Description: Fetched live
+Source: https://ar5iv.labs.arxiv.org/html/2404.02101
+---
+[2404.02101] CameraCtrl: Enabling Camera Control for Video Diffusion Models
+CameraCtrl: Enabling Camera Control for Video Diffusion Models
+Hao He
+Yinghao Xu
+Yuwei Guo
+Thanks:
+This work was done while the author was an intern at Shanghai Artificial Intelligence Laboratory.
+Affiliation:
+The Chinese University of Hong Kong
+Affiliation:
+The Chinese University of Hong Kong
+Affiliation:
+Shanghai Artificial Intelligence Laboratory
+Affiliation:
+Shanghai Artificial Intelligence Laboratory
+Affiliation:
+Stanford University
+Gordon Wetzstein
+Bo Dai
+Hongsheng Li
+Ceyuan Yang
+Thanks:
+Corresponding author
+Affiliation:
+The Chinese University of Hong Kong
+Affiliation:
+Shanghai Artificial Intelligence Laboratory
+Affiliation:
+Stanford University
+Abstract
+Controllability plays a crucial role in video generation, as it allows users to create and edit content more precisely.
+Existing models, however, lack control of camera pose that serves as a cinematic language to express deeper narrative nuances.
+To alleviate this issue, we introduce
+CameraCtrl
+, enabling accurate camera pose control for video diffusion models.
+Our approach explores effective camera trajectory parameterization along with a plug-and-play camera pose control module that is trained on top of a video diffusion model, leaving other modules of the base model untouched.
+Moreover, a comprehensive study on the effect of various training datasets is conducted, suggesting that videos with diverse camera distributions and similar appearance to the base model indeed enhance controllability and generalization.
+Experimental results demonstrate the effectiveness of
+CameraCtrl
+in achieving precise camera control with different video generation models, marking a step forward in the pursuit of dynamic and customized video storytelling from textual and camera pose inputs.
+The project website is at:
+https://hehao13.github.io/projects-CameraCtrl/
+.
+1
+Introduction
+Recently, diffusion models have significantly advanced the ability to generate video from text or other input
+(
+Blattmann et al. 2023b
+;
+Xing et al. 2023
+;
+Wu et al. 2023
+;
+Ho et al. 2022a
+;
+Guo et al. 2023b
+)
+, with a transformative impact on digital content design workflows.
+In the applications of practical video generation applications, controllability plays a crucial role, allowing for better customization according to user needs.
+This improves the quality, realism, and usability of the generated videos.
+Although text and image inputs are commonly used to achieve controllability, they may lack precise control over visual content and object motion.
+To address this, some approaches have been proposed, leveraging control signals such as optical flow
+(
+Yin et al. 2023
+;
+Chen et al. 2023b
+;
+Shi et al. 2024
+)
+, pose skeleton
+(
+Ma et al. 2023
+;
+Ruiz et al. 2023
+)
+, and other multi-modal signals
+(
+Wang et al. 2024
+;
+Ruan et al. 2023
+)
+, enabling more accurate control for guiding video generation.
+Figure 1:
+Illustration of
+CameraCtrl
+.
+It can control the camera trajectory for both general T2V
+(
+Guo et al. 2023b
+)
+and personalized T2V generation
+(
+civitai
+)
+, shown in the first two rows.
+Besides, illustrated in the third row, it can be used with I2V diffusion models, like Stable Video Diffusion
+(
+Blattmann et al. 2023a
+)
+.
+The condition image is the first image of row 3.
+CameraCtrl
+can also collaborate with other visual controllers, such as the RGB encoder from SparseCtrl
+(
+Guo et al. 2023a
+)
+to generate videos condition on image and text conditions and manage camera movements.
+However, existing models lack precise control over adjusting or simulating camera viewpoints in video generation.
+The ability to control the camera viewpoints during the video generation process is crucial in many applications, such as visual reality, augmented reality, and game development.
+Moreover, skillful management of camera movements enables creators to emphasize emotions, highlight character relationships, and guide the audience’s focus, which holds significant value in the film and advertising industries.
+Recent efforts have been made to introduce camera control in video generation. For example, AnimateDiff
+(
+Guo et al. 2023b
+)
+incorporates a MotionLoRA module on top of its motion module, enabling some specific types of camera movement.
+Nevertheless, it struggles to generalize to the camera trajectories customized by users.
+MotionCtrl
+(
+Wang et al. 2023
+)
+offers more flexible camera control by conditioning video diffusion models on a sequence of camera pose parameters, but it relies solely on the numerical values of camera parameters without geometric cues of camera poses, which is insufficient in ensuring precise camera control.
+Additionally, MotionCtrl lacks the ability to generalize camera control across other personalized video generation models.
+We thus introduce
+CameraCtrl
+, learning a precise plug-and-play camera pose control module that could control camera viewpoints in video generation.
+Considering that seamlessly integrating a camera control module into existing video diffusion models is challenging, we investigate how to represent and inject the camera pose effectively.
+Concretely, we adopt Plücker embeddings
+(
+Sitzmann et al. 2021
+)
+as the primary form of camera pose conditioning.
+This choice is attributed to their encoding of geometric interpretations for each pixel in a video frame, offering a comprehensive description of camera pose information.
+To ensure the applicability and generalizability of our
+CameraCtrl
+after training, we introduce a camera control module that only takes the Plücker embedding as input and is thus agnostic to the appearance of the training dataset.
+To evaluate effective training strategies of the camera control model, a comprehensive study is conducted to investigate the effects of various types of training data, ranging from photorealistic to synthetic data.
+Experimental results suggest that data (
+e.g.,
+RealEstate10K
+(
+Zhou et al. 2018
+)
+) with similar appearance to the original base model and diverse camera pose distribution achieve the best trade-off between generalizability and controllability.
+We first implement
+CameraCtrl
+on top of AnimateDiff, enabling precise camera control in text-to-video (T2V) generation across various personalized T2V models (see
+Fig.
+1
+, rows 1–2).
+We also integrate
+CameraCtrl
+with Stable Video Diffusion
+(
+Blattmann et al. 2023a
+)
+to achieve camera control in the image-to-video (I2V) setting, illustrated in the third row of
+Fig.
+1
+.
+In addition, as shown in the last row of
+Fig.
+1
+,
+CameraCtrl
+is also compatible with other plug-and-play modules,
+e.g.,
+SparseCtrl
+(
+Guo et al. 2023a
+)
+to control video viewpoints under the conditions of both text and structure information,
+e.g.,
+image.
+In summary, our main contributions have three parts:
+•
+We introduce
+CameraCtrl
+, which empowers video diffusion models with flexible and precise controllability over camera viewpoints.
+•
+The plug-and-play camera control module can be adapted to various video generation models, producing visually appealing camera control.
+•
+We provide a comprehensive analysis of datasets to train the camera control module. We hope this will be helpful for future research in this direction.
+2
+Related Work
+Video generation.
+Benefiting from the stability in training and well-established open-sourced communities, recent attempts at video generation, mainly leverage diffusion models
+(
+Ho et al. 2020
+;
+Song et al. 2020
+;
+Peebles & Xie 2023b
+)
+.
+Many recently video diffusion models are the T2V models
+(
+Karras et al. 2023
+;
+Ruan et al. 2023
+;
+Zhang et al. 2023b
+;
+He et al. 2022
+;
+Chen et al. 2023a
+;
+Hong et al. 2022
+;
+Yang et al. 2024b
+)
+.
+Some approaches seek to replace the guidance signal from text to image, focusing on the I2V setting
+(
+Chen et al. 2023b
+;
+Chen et al. 2023d
+;
+Esser et al. 2023
+)
+.
+As a pioneering approach, Video Diffusion Model
+(
+Ho et al. 2022b
+)
+expands a 2D image diffusion architecture to accommodate video data and jointly train the model on image and video from scratch.
+To utilize powerful pre-trained image generators, such as Stable Diffusion
+(
+Rombach et al. 2022
+)
+, later works inflate the 2D architecture by interleaving temporal layers between the pre-trained 2D layers and finetune the new model on large video dataset
+(
+Bain et al. 2021
+)
+.
+Among them, Align-Your-Latents
+(
+Blattmann et al. 2023b
+)
+efficiently turns a text-to-image (T2I) model into a video generator by aligning independently sampled noise maps.
+Stable video diffusion (SVD)
+(
+Blattmann et al. 2023a
+)
+extends Align-Your-Latents by more elaborate training steps and data curation.
+AnimateDiff
+(
+Guo et al. 2023b
+)
+utilizes a pluggable motion module to enable high-quality animation creation on personalized image backbones
+(
+Ruiz et al. 2023
+)
+.
+To enhance temporal coherency, Lumiere
+(
+Bar-Tal et al. 2024
+)
+replaces the commonly used temporal super-resolution module and directly generates full-frame-rate videos.
+Other significant attempts include leveraging scalable transformer backbone
+(
+Ma et al. 2024
+)
+, operating in space-temporal compressed latent space,
+e.g.
+, W.A.L.T.
+(
+Gupta et al. 2023
+)
+and Sora
+(
+Brooks et al. 2024
+)
+, and using discrete token with language model for video generation
+(
+Kondratyuk et al. 2023
+)
+. Please see
+(
+Po et al. 2023
+)
+for a comprehensive survey.
+Controllable video generation.
+The ambiguity of text or image conditioning alone often leads to weak control for video diffusion models.
+To provide enhanced guidance, some works adopt other signals,
+e.g.
+, depth/skeleton sequence, to precisely control the scene/human motion in the generated videos
+(
+Guo et al. 2023a
+;
+Chen et al. 2023c
+;
+Zhang et al. 2023c
+;
+Khachatryan et al. 2023
+;
+Hu et al. 2023
+;
+Xu et al. 2023
+)
+.
+Another method
+(
+Guo et al. 2023a
+)
+utilizes sketch images as the control signal, contributing to high video quality or accurate temporal relationship modeling.
+In contrast, our work focuses on camera control during the video generation process. AnimateDiff adopts efficient LoRA
+(
+Hu et al. 2021
+)
+finetuning to obtain model weights specified for different camera movement types.
+Direct-a-Video
+(
+Yang et al. 2024a
+)
+proposes a camera embedder to control the camera pose of generated videos, but only conditions three camera parameters, limiting its camera control ability to the most basic types, such as pan left.
+MotionCtrl
+(
+Wang et al. 2023
+)
+takes more camera parameters as input to control the camera viewpoints.
+However, solely relying on the numerical values of camera parameters restricts the accuracy of camera control, and the necessity to fine-tune part of the video diffusion model’s parameter can hamper its generalization ability across different video domains.
+In this study, we aim to control the camera poses during the video generation process precisely, and expect the corresponding model can be used in various video generation models.
+3
+CameraCtrl
+Introducing precise control of the camera into existing video generation methods is challenging, but holds significant value in terms of achieving desired results.
+To accomplish this, we address this problem by considering three key questions:
+(1)
+How can we effectively represent the camera condition to reflect the geometric movement in 3D space?
+(2)
+How can we seamlessly inject the camera condition into existing video generators without compromising frame quality and temporal consistency?
+(3)
+What type of training data should be utilized to ensure proper model training?
+This section is thus organized as follows:
+Section
+3.1
+presents a brief background discussion of video generation models;
+Section
+3.2
+introduces the camera representation used by
+CameraCtrl
+;
+Section
+3.3
+presents the camera model
+Φ
+c
+\mathrm{\Phi}_{c}
+for injecting camera representation into the video diffusion models. The data selection process is discussed in
+Section
+3.4
+.
+3.1
+Preliminaries of Video Generation
+Video diffusion models.
+T2V diffusion models have seen significant advancements in recent years.
+Some approaches
+(
+Singer et al. 2022
+;
+Ho et al. 2022b
+)
+train video generators from scratch, while others
+(
+Guo et al. 2023b
+;
+Blattmann et al. 2023b
+)
+utilize powerful T2I diffusion models as the pretrained model and train some temporal blocks on them.
+Besides, some methods jointly train the video generators using images and videos
+(
+Yang et al. 2024b
+)
+.
+Despite with different training recipes, these models often adhere to the original formulation used for image generation.
+Concretely, a sequence of
+N
+N
+images (or their latent features)
+z
+0
+1
+:
+N
+z_{0}^{1:N}
+are first added noises
+ϵ
+\epsilon
+gradually to a normal distribution at
+T
+T
+steps. Given the noised input
+z
+t
+1
+:
+N
+z_{t}^{1:N}
+at the
+t
+t
+step, a neural network
+ϵ
+^
+θ
+\hat{\epsilon}_{\theta}
+is trained to predict the added noises.
+During the training, the network tries to minimize the mean squared error (MSE) between its prediction and the ground truth noise scale; the training objective function is formulated as follows:
+ℒ
+(
+θ
+)
+=
+𝔼
+z
+0
+1
+:
+N
+,
+ϵ
+,
+c
+t
+,
+t
+[
+∥
+ϵ
+−
+ϵ
+^
+θ
+(
+z
+t
+1
+:
+N
+,
+c
+t
+,
+t
+)
+∥
+2
+2
+]
+,
+{\mathcal{L}}(\theta)=\mathbb{E}_{z_{0}^{1:N},\epsilon,c_{t},t}[\|\epsilon-\hat{\epsilon}_{\theta}(z_{t}^{1:N},c_{t},t)\|^{2}_{2}],
+(1)
+where
+c
+t
+c_{t}
+represents embeddings of the corresponding condition signal, like text prompts.
+Controllable video generation.
+In addition to text conditioning, there have been further advancements in enhancing controllability. By incorporating additional structural control signals
+s
+t
+s_{t}
+(
+e.g.
+, depth maps and canny maps) into the process, controllability for both image and video generation can be enhanced.
+Typically, these control signals are first fed into an additional encoder
+Φ
+s
+\mathrm{\Phi}_{s}
+and then injected into the generator through various operations
+(
+Zhang et al. 2023a
+;
+Mou et al. 2023
+;
+Ye et al. 2023
+)
+.
+Consequently, the objective of training this encoder can be defined as follows:
+ℒ
+(
+θ
+)
+=
+𝔼
+z
+0
+1
+:
+N
+,
+ϵ
+,
+c
+t
+,
+s
+t
+,
+t
+[
+∥
+ϵ
+−
+ϵ
+^
+θ
+(
+z
+t
+1
+:
+N
+,
+c
+t
+,
+Φ
+s
+(
+s
+t
+)
+,
+t
+)
+∥
+2
+2
+]
+.
+{\mathcal{L}}(\theta)=\mathbb{E}_{z_{0}^{1:N},\epsilon,c_{t},s_{t},t}[\|\epsilon-\hat{\epsilon}_{\theta}(z_{t}^{1:N},c_{t},\mathrm{\Phi}_{s}(s_{t}),t)\|^{2}_{2}].
+(2)
+In this work, we take the camera poses as an additional control signal to the video diffusion models and strictly follow the objective of
+Eq.
+2
+to train our camera encoder
+Φ
+c
+\mathrm{\Phi}_{c}
+.
+3.2
+Camera Pose Representation
+Before diving into the architecture and training of the camera control module, we first investigate which kind of camera representation could precisely reflect the camera movement in 3D space.
+Camera representation.
+Typically, the camera pose refers to the intrinsic and extrinsic parameters, denoted as
+𝐊
+∈
+ℝ
+3
+×
+3
+\mathbf{K}\in\mathbb{R}^{3\times 3}
+and
+𝐄
+=
+[
+𝐑
+;
+𝐭
+]
+∈
+ℝ
+3
+×
+4
+\mathbf{E}=[\mathbf{R};\mathbf{t}]\in\mathbb{R}^{3\times 4}
+, respectively, where
+𝐑
+∈
+ℝ
+3
+×
+3
+\mathbf{R}\in\mathbb{R}^{3\times 3}
+representations the rotation part of the extrinsic parameters, and
+𝐭
+∈
+ℝ
+3
+×
+1
+\mathbf{t}\in\mathbb{R}^{3\times 1}
+is the translation part.
+To condition a video generator on camera pose, one straightforward choice is to feed raw values of the camera parameters into the generator.
+However, such a choice may not contribute to accurate camera control for several reasons:
+(1)
+While the rotation matrix
+𝐑
+\mathbf{R}
+is constrained by orthogonality, the translation vector
+𝐭
+\mathbf{t}
+is typically unconstrained in magnitude, leading to a mismatch in the learning process of camera control model.
+(2)
+Direct use of raw camera parameters makes it difficult for the model to correlate these values with image pixels, limiting precise control over visual details.
+We thus choose Plücker embeddings
+(
+Sitzmann et al. 2021
+)
+as the camera pose representation.
+Specifically, for each pixel
+(
+u
+,
+v
+)
+(u,v)
+in the image coordinate space, its Plücker embedding is
+𝐩
+u
+,
+v
+=
+(
+𝐨
+×
+𝐝
+u
+,
+v
+,
+𝐝
+u
+,
+v
+)
+∈
+ℝ
+6
+\mathbf{p}_{u,v}=(\mathbf{o}\times\mathbf{d}_{u,v},\mathbf{d}_{u,v})\in\mathbb{R}^{6}
+, where
+𝐨
+∈
+ℝ
+3
+\mathbf{o}\in\mathbb{R}^{3}
+is the camera center in world coordinate space, and
+𝐝
+u
+,
+v
+∈
+ℝ
+3
+\mathbf{d}_{u,v}\in\mathbb{R}^{3}
+is the direction vector in world coordinate space pointed from the camera center to the pixel
+(
+u
+,
+v
+)
+(u,v)
+, it is calculated as,
+𝐝
+u
+,
+v
+=
+𝐑𝐊
+−
+𝟏
+​
+[
+u
+,
+v
+,
+1
+]
+T
++
+𝐭
+.
+\mathbf{d}_{u,v}=\mathbf{RK^{-1}}[u,v,1]^{T}+\mathbf{t}.
+(3)
+Then, it is normalized to ensure it has a unit length. For the
+i
+i
+-th frame in a video sequence, its Plücker embedding can be expressed as
+𝐏
+i
+∈
+ℝ
+6
+×
+h
+×
+w
+\mathbf{P}_{i}\in\mathbb{R}^{6\times h\times w}
+, where
+h
+h
+and
+w
+w
+are the height and width for the frame.
+Note that
+Eq.
+3
+represents the inverse process of camera projection, which maps a point from the 3D world coordinate space into the pixel coordinate system through the use of matrices
+𝐄
+\mathbf{E}
+and
+𝐊
+\mathbf{K}
+.
+Thus, compared with the numerical values of extrinsic and intrinsic matrices, the Plücker embedding has more geometric interpretation for each pixel of a video frame then can provide a more informative description of camera pose information to the base video generators.
+Consequently, it can better adopt the temporal consistency ability of base video generators to generate video clips with a specific camera trajectory.
+Besides, the value ranges of each item in the Plücker embedding are more uniform, which is beneficial for the learning process of a data-driven model.
+The illustration of different camera representations are in the
+Fig.
+6
+, both the camera matrices and the Euler angles are numerical values, while the Plücker embedding is a pixel-wise spatial embedding.
+After obtaining the Plücker embedding
+𝐏
+i
+\mathbf{P}_{i}
+for the camera pose of the
+i
+i
+-th frame, we represent the entire camera trajectory of a video as a Plücker embedding sequence
+𝐏
+∈
+ℝ
+n
+×
+6
+×
+h
+×
+w
+\mathbf{P}\in\mathbb{R}^{n\times 6\times h\times w}
+, where
+n
+n
+denotes the total number of frames in a video clip.
+Figure 2:
+Framework of
+CameraCtrl
+.
+(a) Given a pre-trained video diffusion model (
+e.g.
+AnimateDiff
+(
+Guo et al. 2023b
+)
+) and SVD
+(
+Blattmann et al. 2023a
+)
+,
+CameraCtrl
+trains a camera encoder on it, which takes the Plücker embedding as input and outputs multi-scale camera representations.
+These features are then integrated into the temporal attention layers of the U-Net at their respective scales to control the video generation process.
+(b) Details of the camera injection process.
+The camera features
+c
+t
+c_{t}
+and the latent features
+z
+t
+z_{t}
+are first combined through the element-wise addition.
+A learnable linear layer is adopted to further fuse two representations which are then fed into the first temporal attention layer of each temporal block.
+3.3
+Camera Controllability into Video Generators
+Due to the fact that a camera trajectory is parameterized by a Plücker embedding sequence as a pixel-wise spatial ray map, we follow the literature
+(
+Zhang et al. 2023a
+;
+Mou et al. 2023
+)
+by first using an encoder model to extract the features of a Plücker embedding sequence and then fusing the camera features into video generators.
+Camera encoder.
+Given a specific camera encoder, we can take both the Plücker embedding sequence and the corresponding image features as its input, like the ControlNet
+(
+Zhang et al. 2023a
+)
+.
+Alternatively, we can input only the camera features into the camera encoder, as done by the T2I-Adaptor
+(
+Mou et al. 2023
+)
+.
+Through empirical analysis, we observe that the first approach tends to leak appearance information from the training dataset due to the use of the input image’s latent representation.
+This causes the model to rely on the appearance bias inherent in the training data, thereby limiting its ability to generalize camera pose control across various domains.
+Therefore, as illustrated in
+Fig.
+2
+(a), our camera encoder
+Φ
+c
+\mathrm{\Phi}_{c}
+only take the Plücker embedding as input and delivers multi-scale features.
+Based on the encoder used in T2I-Adaptor, we introduce a camera encoder specifically designed for videos.
+This camera encoder includes a temporal attention module after each convolutional block, allowing it to capture the temporal relationships between camera poses throughout the video clip.
+The detailed architecture of camera encoder is in
+Section
+D.1
+.
+Camera fusion.
+After obtaining the multi-scale camera features, we aim to integrate these features seamlessly into the U-Net architecture of the video diffusion model.
+Thus, we further investigate the different types of layers in the U-Net, aiming to determine which layer should be used to incorporate the camera information.
+Recall that the U-Net model contains both spatial and temporal attention.
+We inject the camera features into the temporal attention blocks.
+This decision stems from the capability of the temporal attention layer to capture temporal relationships, aligning with the inherent sequential and causal nature of a camera trajectory, while the spatial attention layers always picture the individual frames.
+This camera feature fusion process is shown in
+Fig.
+2
+(b).
+The image latent features
+z
+t
+z_{t}
+and the camera pose features
+c
+t
+c_{t}
+are directly combined through pixel-wise addition.
+Then, the integrated feature is passed through a linear layer, whose output is fed directly into the fixed first temporal attention layer of each temporal attention module.
+3.4
+Learning Camera Distribution in Data-Driven Manner
+Training the aforementioned camera encoder and the fusion linear layers on a video generator usually requires a lot of videos with camera pose annotations.
+One can obtain the camera trajectory through structure-from-motion (SfM),
+e.g.,
+COLMAP
+(
+Schönberger & Frahm 2016
+)
+for realistic videos while others could collect videos with ground-truth camera poses from rendering engines, such as Blender.
+We thus investigate the effect of various training data on the camera-controlled generator.
+Dataset selection.
+We aim to select a dataset with appearances that closely match the training data of the base video diffusion models and have as wide a camera pose distribution as possible.
+We choose three datasets as the candidates: Objaverse
+(
+Deitke et al. 2023
+)
+, MVImageNet
+(
+Yu et al. 2023
+)
+, and RealEstate10K
+(
+Zhou et al. 2018
+)
+.
+Samples from the three datasets can be found in the
+Fig.
+5
+.
+Indeed, datasets with computer-generated imagery, such as Objaverse
+(
+Deitke et al. 2023
+)
+, exhibit diverse camera distributions since we can control the camera parameters during the rendering process.
+Yet, these datasets often suffer from a distribution gap in appearance when compared to real-world datasets, such as WebVid10M
+(
+Bain et al. 2021
+)
+, which is used to train the base video diffusion model.
+When dealing with real-world datasets, such as MVImageNet and RealEstate10K, the distribution of camera parameters is often not very broad.
+In this case, a balance needs to be found between the complexity of individual camera trajectory and the diversity among multiple camera trajectories.
+The former ensures that the model learns to control complex trajectories during each training process, while the latter guarantees that the model does not overfit to certain fixed patterns.
+In reality, while the complexity of camera trajectories in MVImageNet may slightly exceed than that of RealEstate10K for individual trajectories, the trajectories of MVImageNet are typically limited to horizontal rotations.
+In contrast, RealEstate10K showcases a wide variety of camera trajectories.
+Considering our goal is to apply the model to a wide range of custom trajectories, we ultimately selected RealEstate10K as our training dataset.
+Besides, there are some other datasets with characteristics similar to RealEstate10K, such as ACID
+(
+Liu et al. 2021
+)
+and MannequinChallenge
+(
+Li et al. 2019
+)
+, but their data volume is much smaller than RealEstate10K.
+We tried to combine them with RealEstate10K to jointly train the
+CameraCtrl
+model, but fo

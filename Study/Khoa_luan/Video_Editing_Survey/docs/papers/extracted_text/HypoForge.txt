@@ -1,0 +1,1061 @@
+--- PAGE 1 ---
+HypoForge: A Self-Improving Multi-Agent Framework for Automated Hypothesis
+Generation and Testing via Scientific Skill Learning
+Ziqing Qian1,2, Jiaying Lei1,2,3, Yifang Wang4, Nan Cao1,2,3∗
+1Intelligent Big Data Visualization Lab, Tongji University, Shanghai, China
+2Shanghai Research Institute for Intelligent Autonomous System, Tongji University, Shanghai, China
+3Shanghai Innovation Institute, Shanghai, China
+4Florida State University Tallahassee, Florida, USA
+2411920@tongji.edu.cn, jiaying.lei@outlook.com, yifang.wang@fsu.edu, nan.cao@gmail.com
+Abstract
+Large language models (LLMs) have enabled AI scientist sys-
+tems to automate scientific discovery, yet existing approaches
+most rely on static prompting or fixed workflows and fail to ac-
+cumulate experience for continual improvement. We propose
+HypoForge, an experience-guided multi-agent framework that
+learns reusable scientific skills for automated hypothesis gen-
+eration and hypothesis testing. HypoForge is built on the ob-
+servation that these two stages involve different supervision
+signals. For hypothesis generation, where explicit feedback
+is unavailable, HypoForge adopts an adversarial generator–
+discriminator mechanism to improve reasoning through com-
+parative critique. For hypothesis testing, where empirical feed-
+back is available, HypoForge learns testing skills from exe-
+cution outcomes and ground-truth results. By matching skill
+learning strategies with stage-specific supervision, HypoForge
+enables continual improvement without fine-tuning founda-
+tion models. Experiments on hypothesis generation and testing
+benchmarks show that HypoForge consistently outperforms
+existing AI scientist frameworks and skill-level variants. Fur-
+ther analysis demonstrates the effectiveness of the proposed
+stage-specific skill learning paradigms.
+Introduction
+Hypothesis generation and hypothesis testing constitute the
+core of hypothesis-driven scientific research. Given a re-
+search question and empirical observations, scientists for-
+mulate candidate hypotheses to explain underlying phenom-
+ena and subsequently validate them through statistical analy-
+ses and experimental evidence. More importantly, scientific
+research is inherently cumulative: researchers continuously
+summarize reusable scientific skills from previous successes
+and failures, enabling them to generate better hypotheses, de-
+sign more reliable experiments, and solve increasingly com-
+plex scientific problems.
+Recent advances in large language models (LLMs) have
+led to the emergence of AI scientist systems capable of au-
+tomating scientific reasoning (Wang et al. 2023b), hypothesis
+generation (Zhou et al. 2024), experiment design (Boiko et al.
+2023), code generation (Yang et al. 2024), and data analy-
+sis (Gu et al. 2024). Although these systems have demon-
+strated impressive reasoning capabilities, most either focus
+∗Corresponding author.
+on a single stage of scientific discovery, producing hypothe-
+ses that are never tested against data or testing hypotheses
+that must be supplied externally, or operate through static
+prompting or predefined workflows, limiting their ability to
+distill, accumulate, and reuse scientific experience across
+tasks. As a result, they repeatedly pay similar reasoning ef-
+forts from scratch across tasks, leading to reduced discovery
+efficiency (Wang et al. 2023a).
+We therefore ask how the discovery experience can be dis-
+tilled into reusable scientific skills across the two stages that
+constitute the discovery loop: hypothesis generation and hy-
+pothesis testing. The central challenge is that the two stages
+differ fundamentally in the supervision available for skill
+learning. Hypothesis generation is an open-ended scientific
+reasoning task that lacks explicit supervision, making it dif-
+ficult to directly assess hypothesis quality. Consequently, im-
+provement relies on comparing and critiquing alternative hy-
+potheses to gradually distill effective reasoning strategies. In
+contrast, hypothesis testing naturally provides empirical su-
+pervision through executable experiments and ground-truth
+outcomes, enabling direct evaluation of experimental design
+and implementation. These fundamentally different supervi-
+sion signals imply that hypothesis generation and hypothesis
+testing require stage-specific learning paradigms rather than
+a unified refinement strategy.
+To address this, we propose HypoForge, a self-improving
+multi-agent framework for automated hypothesis genera-
+tion and hypothesis testing. Rather than simply storing pre-
+vious reasoning trajectories, HypoForge continuously dis-
+tills accumulated experience into reusable scientific skills
+that improve future reasoning. Specifically, for hypothesis
+generation, HypoForge introduces an adversarial generator–
+discriminator framework that iteratively learns hypothesis-
+generation skills through comparative critique without ex-
+plicit supervision. For hypothesis testing, HypoForge ex-
+ploits execution outcomes and ground-truth feedback to it-
+eratively learn testing skills under empirical supervision. By
+aligning skill learning with the supervision characteristics
+of each stage, HypoForge enables continual capability im-
+provement without requiring fine-tuning of the underlying
+foundation models. We evaluate HypoForge on benchmark
+datasets for automated hypothesis generation and hypothesis
+testing. Experimental results demonstrate that HypoForge
+consistently outperforms existing AI scientist frameworks
+arXiv:2608.25770v1  [cs.MA]  26 Aug 2026
+
+
+--- PAGE 2 ---
+and skill-level variants in both hypothesis quality and test-
+ing performance. Extensive ablation studies further verify
+the effectiveness of the proposed stage-specific skill learning
+paradigms. Our contributions are summarized as follows:
+• We propose HypoForge, a self-improving multi-agent
+framework that learns reusable scientific skills for au-
+tomated hypothesis generation and hypothesis testing.
+• We identify the distinct supervision characteristics of hy-
+pothesis generation and hypothesis testing, and develop
+two stage-specific skill learning paradigms: an adversarial
+self-improvement mechanism for hypothesis generation
+without explicit supervision, and a ground-truth feedback
+learning mechanism for hypothesis testing with empirical
+supervision.
+• Extensive experiments demonstrate that HypoForge con-
+sistently improves both hypothesis generation and hypoth-
+esis testing over existing AI scientist frameworks, while
+the learned skills exhibit strong transferability across di-
+verse scientific research tasks.
+Related Work
+In this section, we review two research directions most re-
+lated to our work: autonomous scientific discovery and skill
+learning for LLM agents.
+Autonomous Scientific Discovery
+Autonomous scientific discovery aims to enable machines to
+generate and validate novel scientific hypotheses from em-
+pirical evidence (Wang et al. 2023b). Central to autonomous
+scientific discovery are hypothesis generation and hypothesis
+testing, which form an iterative reasoning loop that trans-
+forms empirical observations into testable explanations and
+evaluates whether those explanations are supported by ev-
+idence. With recent advances in artificial intelligence (AI)
+and large-scale data-driven approaches, automated hypoth-
+esis generation and testing have attracted increasing atten-
+tion. Takagi et al. demonstrated the potential of LLMs for
+scientific ideation through knowledge synthesis (Takagi, Ya-
+mauchi, and Kumagai 2023), while Zhou et al. showed that
+prompting strategies and contextual information significantly
+affect generated hypotheses (Zhou et al. 2024). Recent bench-
+marks, including HypoBench and DiscoveryBench, have es-
+tablished standardized evaluations for LLM-based hypoth-
+esis generation (Liu et al. 2025; Majumder et al. 2025).
+Beyond generation tasks, a few studies have also explored
+automated hypothesis testing by integrating LLM reasoning
+with computational experiments and iterative testing, includ-
+ing self-improving scientific agents (Brunnsåker et al. 2025),
+sequential falsification frameworks (Huang et al. 2025), and
+multi-agent discovery workflows (Gupta et al. 2026).
+Despite these advances, existing systems typically focus
+on a single stage of scientific discovery, either hypothesis
+generation or hypothesis testing, and rely on the pretrained
+model’s fixed reasoning ability to solve each new task, thus
+limiting their ability to accumulate experience and progres-
+sively improve their scientific reasoning. Our work bridges
+this gap through agent skill learning, integrating hypothesis
+generation and testing into a unified discovery process while
+distilling accumulated discovery experiences into reusable
+reasoning capabilities.
+Agent Skill Learning
+Recent LLM agents have evolved from stateless reasoning
+toward experience-driven capability improvement. Memory-
+augmented agents, such as Generative Agents and MemGPT,
+introduced mechanisms to store and retrieve long-term infor-
+mation to support future interactions (Park et al. 2023; Packer
+et al. 2023). Reflexion further enable agents to learn from
+past failures (Shinn et al. 2023), while Self-Refine demon-
+strated iterative refinement through self-generated feedback
+without updating model parameters (Madaan et al. 2023).
+Building upon these ideas, a few studies have investigated
+agent skill learning as a way to distill reusable capabilities
+from accumulated past experiences. Voyager pioneered auto-
+matic skill library construction, allowing agents to discover,
+store, and reuse executable skills during open-ended interac-
+tion (Wang et al. 2023a). Subsequent research has extended
+this paradigm from skill storage toward skill acquisition,
+optimization, and refinement. For example, reinforcement
+learning-based approaches explore how agents can improve
+skill libraries through interaction experiences (Wang et al.
+2026), while another line of research investigates automatic
+skill optimization and revision through trajectory feedback
+and testing approaches (Yang et al. 2026; Liu et al. 2026).
+More recent studies further explore self-evolving skill frame-
+works that improve agent capabilities through iterative skill
+generation, evaluation, and refinement(Zhang et al. 2026;
+Vishe et al. 2026).
+However, existing skill-learning approaches typically op-
+timize agent skills in a unified manner, aggregating experi-
+ences and feedback from different stages without explicitly
+modeling their distinct capabilities. This limits stage-specific
+skill refinement and feedback attribution, making it difficult
+to determine how accumulated experiences should be trans-
+formed into targeted procedural skills for complex multi-step
+workflows. In this work, we address this problem by design-
+ing a stage-specific skill learning framework that leverages
+different feedback to distill transferable strategies for hypoth-
+esis generation and testing.
+Problem Formulation
+Given a user research problem P and an associated data
+source D, the multi-agent system aims to generate a set of
+hypotheses H = {hi}M
+i=1 and corresponding testing trajec-
+tories V = {τi}M
+i=1, where τi = (hi, ei, ci, ri) denotes the
+testing trajectory of each hypothesis, including the hypothe-
+sis (hi), experimental design (ei), executable code (ci), and
+execution outcome (ri). For each iteration t, the system gen-
+erates hypotheses Ht and testing trajectories Vt based on the
+current skills and accumulated discovery experiences. The
+objective is to progressively learn three reusable procedural
+agent skills St = {St
+h, St
+e, St
+x} for hypothesis generation, ex-
+perimental design, and experiment execution, respectively.
+The skills are iteratively updated by the multi-agent sys-
+tem based on newly acquired experiences and feedback from
+
+
+--- PAGE 3 ---
+Research
+Problem
+Data Source 
+Input
+Hypothesis
+Generator
+Hypothesis
+Discriminator
+Generate hypothesis
+Skill Distiller
+Hypothesis
+Generation Skill
+Feedback
+Feedback
+Experiment
+Designer
+Experiment
+Executor
+Generate 
+designs
+Experiment
+Design Skill
+Experiment
+Execute Skill
+Testing
+results
+Distill
+Distill
+Distill
+Adversarial Hypothesis Generation
+b
+c
+a
+Experience-Guided Hypothesis Testing
+Output
+d
+Generated
+hypotheses
+Statistical
+results
+Experiment
+designs
+Generated
+codes
+Skill Distiller
+ℎ1, ℎ2, … , ℎ𝑛
+Figure 1: Multi-agent framework that supports hypothesis generation and testing with skill learning.
+training records:
+St+1
+h
+= Φh(St
+h, Ht, Ft
+h),
+(1)
+St+1
+e
+, St+1
+x
+= Φt(St
+e, St
+x, Vt),
+(2)
+where Φh denote the skill learning processes for hypothesis
+generation, Ft
+h denotes the feedback obtained from hypoth-
+esis evaluation, and Φt for hypothesis testing.
+Method
+In this section, we present HypoForge, a stage-wise skill
+learning framework for scientific hypothesis generation and
+testing. As illustrated in Fig. 1, the framework decomposes
+hypothesis-driven scientific research process into two stages
+and learns dedicated skills for each stage according to its
+distinct reasoning process and supervision signals. The ad-
+versarial hypothesis generation stage (Fig. 1(b)) iteratively
+refines hypothesis construction through interactions between
+a hypothesis generator and a discriminator, distilling multi-
+dimensional evaluation feedback into reusable hypothesis-
+generation skills. The experience-guided hypothesis testing
+stage (Fig. 1(c)) learns reusable testing skills from prior
+testing trajectories by exploiting ground-truth outcomes and
+feedback from experiment design, execution, and validation.
+Adversarial Hypothesis Generation
+Inspired by adversarial learning in Generative Adversarial
+Networks (GANs) (Goodfellow et al. 2014), we formulate
+hypothesis generation as an adversarial skill learning prob-
+lem (Fig. 1(b)). Specifically, a hypothesis generator pro-
+duces a batch of candidate hypotheses that approximates
+the distribution of plausible scientific discoveries, while a
+multi-dimensional discriminator evaluates the generated hy-
+pothesis set as a whole. Unlike the binary discriminator
+in conventional GANs, our discriminator is formulated as
+a scoring function that measures how closely the gener-
+ated hypothesis distribution matches the characteristics of
+high-quality human-written scientific hypotheses. The re-
+sulting distribution-level feedback is distilled into reusable
+hypothesis-generation skills, enabling the generator to pro-
+gressively improve its generation policy across iterative inter-
+actions. Compared with Reviewer/Critic-based multi-agent
+frameworks, which iteratively revise individual generation
+items using instance-level feedback, our framework performs
+distribution-level optimization over the entire hypothesis set.
+Consequently, the learned skills capture transferable gener-
+ation strategies, including variable selection, causal reason-
+ing, hypothesis construction, and avoidance of common hy-
+pothesis generation failures, rather than hypothesis-specific
+corrections, leading to better generalization across different
+hypothesis-driven scientific research tasks.
+Hypothesis Generator
+Given a research problem P and
+data source D, the hypothesis generator Gh produces a batch
+of candidate hypotheses,
+Ht = {ht
+1, ht
+2, . . . , ht
+N} = Gh(P, D, St
+h),
+(3)
+where St
+h denotes the hypothesis generation skill accumu-
+lated from previous adversarial interactions.
+The generated hypothesis set provides a distributional ap-
+proximation of plausible scientific discoveries, enabling the
+discriminator to jointly evaluate the scientific quality, di-
+versity, and discovery coverage of the generated hypotheses.
+Each hypothesis is represented as a structured scientific claim
+describing a testable relationship between variables together
+with its expected direction. The generator prompt specifies
+only the agent role, research objective, output format, and
+general constraints, while the learned skill St
+h encapsulates
+reusable procedural knowledge distilled from previous adver-
+sarial interactions, including informative variable selection,
+causal reasoning patterns, hypothesis construction strategies,
+and common failure avoidance.
+Multi-Dimensional Hypothesis Discriminator
+The pro-
+posed discriminator Dh is formulated as a multi-dimensional
+scoring function rather than a binary classifier. Instead of
+determining whether a generated hypothesis is “real” or
+“fake”, Dh estimates how closely the generated hypothesis
+set matches the latent distribution of high-quality human-
+written scientific hypotheses.
+High-quality scientific hypotheses generally satisfy several
+fundamental principles established in the scientific discovery
+literature, including empirical grounding (King et al. 2009;
+Langley 1987), causal validity (Neuberg 2003), falsifiabil-
+ity (Popper 2005), theoretical consistency (Lakatos 1978),
+
+
+--- PAGE 4 ---
+clarity and operationalizability (Shapere 1964), and scien-
+tific novelty (Fortunato et al. 2018). These principles are
+summarized into seven evaluation dimensions:
+di = [Di
+1, Di
+2, . . . , Di
+7],
+(4)
+where D1, D2, D5, D6 ∈[0, 1] measure empirical ground-
+ing, causal plausibility, structural clarity, and scientific nov-
+elty, respectively, while D3, D4, D7 ∈{0, 1} serve as hard
+constraints enforcing falsifiability, theoretical consistency,
+and empirical verifiability. Collectively, these measurements
+(implemented based LLM detailed in the supplement mate-
+rials) characterize the essential properties shared by high-
+quality human-written scientific hypotheses as follows:
+si = Di
+3Di
+4Di
+7
+ Di
+1Di
+2Di
+5Di
+6
+ 1
+4 ,
+(5)
+where larger values indicate greater consistency with the
+characteristics of high-quality human-written hypotheses.
+The overall scientific quality of the generated hypothesis set
+is computed as:
+Q(Ht) = 1
+N
+N
+X
+i=1
+si.
+(6)
+Besides evaluating hypothesis quality, the discriminator
+further compares the generated hypothesis set with reference
+hypotheses to provide reflective feedback:
+C(Ht) = Match(Ht, Hgt),
+(7)
+where Hgt denotes the reference hypothesis set. Unlike hy-
+pothesis quality, this comparison provides additional insights
+into the discovery patterns covered by the generated hypothe-
+ses. Specifically, hypotheses with high overlap with reference
+hypotheses reveal effective scientific patterns, while hypothe-
+ses with limited overlap indicate potential missing factors or
+unexplored directions for future exploration.
+Adversarial Skill Learning
+Inspired by adversarial learn-
+ing, the generator progressively improves its hypothesis gen-
+eration policy by maximizing the scientific quality score,
+max
+Gh LG = Q(Ht).
+(8)
+Unlike conventional GANs, the discriminator is not op-
+timized through binary classification, nor is the generator
+updated via gradient back-propagation. Instead, the discrim-
+inator summarizes the strengths and weaknesses of the gener-
+ated hypothesis set and distills them into reusable procedural
+knowledge:
+St+1
+h
+= Distill
+ St
+h, Ht, Q(Ht), C(Ht)
+
+,
+(9)
+where Distill(·) is a LLM-based agent that extracts trans-
+ferable hypothesis-generation strategies from discriminator
+feedback and accumulated hypothesis experiences.
+The updated skill St+1
+h
+is incorporated into the generator in
+the next iteration, enabling continuous improvement of the
+generation policy. By distilling distribution-level feedback
+into reusable procedural knowledge, the generator progres-
+sively aligns with the distribution of high-quality human-
+written hypotheses, achieving stronger generalization across
+hypothesis-driven scientific research tasks.
+Experience-Guided Hypothesis Testing
+Hypothesis testing systematically evaluates candidate scien-
+tific hypotheses by transforming them into executable em-
+pirical studies and determining whether they are supported
+by observational evidence. Given a hypothesis, the testing
+process consists of designing an experiment protocol, im-
+plementing the corresponding testing procedure, executing
+the analysis on the target dataset, and interpreting the re-
+sulting evidence. Unlike hypothesis generation, hypothesis
+testing provides explicit supervision through ground-truth
+outcomes, allowing the system to evaluate the quality of
+the entire testing process. Building upon this property, we
+propose an experience-guided hypothesis testing framework
+that continuously improves experiment design and execution
+through iterative skill learning. Specifically, the framework
+first generates a textual experiment protocol for each hy-
+pothesis, then implements and executes the corresponding
+testing program, and finally compares the obtained testing
+results with the ground truth to analyze the complete test-
+ing trajectory. The resulting recommendations are distilled
+into reusable experiment design and execution skills, en-
+abling progressively more rigorous and reliable hypothesis
+testing. Specifically, the experiment design skill accumulates
+methodological experience, such as data variable selection,
+confounder control, and analysis method selection, for con-
+structing reliable experiment plans. The execution skill dis-
+tills engineering experience to realize these experiment plans
+in code, including code generation, library usage, debugging,
+and reliable execution of statistical procedures.
+Experiment Design
+Given a hypothesis hi, the experiment
+designer agent Ge constructs a textual experiment protocol
+describing how the hypothesis should be empirically tested
+on the target dataset D:
+ei = Ge(hi, D, St
+e),
+(10)
+where St
+e denotes the learned experiment design skill. The
+protocol ei serves as a high-level testing specification that de-
+fines all essential components of the experiment, including
+hypothesis operationalization, variable selection, data pre-
+processing and filtering, confounder control, statistical analy-
+sis methods, significance criteria, evaluation metrics, and the
+complete experimental workflow. Rather than encoding task-
+specific instructions, the design skill St
+e provides reusable
+procedural knowledge distilled from previous testing expe-
+riences, enabling the agent to progressively construct more
+rigorous and scientifically sound experiment protocols.
+Experiment Execution
+Given ei, the execution agent Gx
+generates an executable testing program ci as follows:
+ci = Gx(ei, St
+x),
+(11)
+where St
+x denotes the learned execution skill. ci is subse-
+quently executed on the target dataset:
+ri = Exec(ci, D),
+(12)
+where ri contains the complete testing outcomes, including
+statistical results, significance tests, estimated effect sizes,
+and the final testing conclusion.
+
+
+--- PAGE 5 ---
+The execution skill St
+x captures reusable implementation
+knowledge for translating ei into reliable programs ci, in-
+cluding statistical implementation, code organization, exe-
+cution robustness, exception handling, debugging strategies,
+and standardized result reporting. The complete testing tra-
+jectory is then represented as:
+τi = (hi, ei, ci, ri),
+(13)
+which records the hypothesis hi, experiment protocol ei,
+implementation ci, and testing outcomes ri for subsequent
+skill refinement.
+Experience-Based Skill Refinement
+After executing the
+testing procedure, the framework compares the obtained test-
+ing outcome with the corresponding ground-truth result to
+evaluate the complete testing trajectory. The ground-truth
+outcome provides explicit supervision for evaluating both
+the testing conclusion and the validity of the underlying ex-
+periment design and implementation.
+Specifically, given a testing trajectory τi = (hi, ei, ci, ri),
+the framework optimizes the experiment design and execu-
+tion skills according to the test pass rate:
+(S∗
+e , S∗
+x) = arg max
+Se,Sx Th,
+(14)
+where Th denotes the proportion of ground-truth hypotheses
+that are successfully tested by the generated experiments.
+Through iterative skill refinement, the framework aims to
+improve the reliability of experiment design and execution
+for future hypothesis testing.
+The accumulated testing trajectories and corresponding
+ground-truth outcomes are subsequently provided to the skill
+distiller for experience-based refinement:
+(St+1
+e
+, St+1
+x
+) = Distill
+ St
+e, St
+x, {τi}N
+i=1
+
+,
+(15)
+where Distill(·) is an LLM-based agent that analyzes pre-
+vious testing trajectories and execution outcomes, attributes
+testing successes and failures to different stages of the ex-
+perimental process, and extracts transferable experimental
+practices rather than memorizing individual cases.
+The refined skills are incorporated into the experiment
+designer and execution agents in subsequent iterations, en-
+abling stage-wise improvement of the entire hypothesis test-
+ing pipeline. By continuously refining experiment design and
+execution skills through accumulated testing experiences, the
+proposed framework acquires transferable testing capabili-
+ties that generalize across diverse hypothesis-driven scien-
+tific research tasks.
+Experiments
+In this section, we conduct comprehensive experiments to
+evaluate the effectiveness of our proposed framework. We
+begin by describing the experimental settings. Then, we
+compare our framework with baselines on both hypothesis
+generation and hypothesis testing tasks. Finally, we perform
+detailed skill learning analysis to investigate skill evolution
+during refinement, and conduct ablation studies to evaluate
+the role of different refinement signals.
+Experimental Setup
+We first introduce the experimental setup, including the
+benchmark datasets, comparison baselines, evaluation met-
+rics, and implementation details.
+Datasets
+We evaluate our framework on HypoBench (Liu
+et al. 2025), a benchmark for scientific hypothesis generation
+and discovery. The original benchmark contains 13 tasks
+from diverse domains, and we use all tasks to construct our
+experimental suite. The detailed task adaptation and prepro-
+cessing procedures are provided in the supplement materials,
+and the statistics of all tasks are summarized in Table 1. Each
+task consists of a research question, an associated dataset, and
+a set of reference hypotheses. For the hypothesis generation
+stage, we use representative data from the selected 13 tasks.
+For the hypothesis testing stage, we retain only tasks with
+empirically evaluable ground-truth hypotheses, as trajectory-
+level supervision from testing outcomes is required to refine
+experiment design and execution skills.
+Task
+Type
+#Data Size
+Deceptive Reviews Detection
+Real
+800
+Dreddit Mental Stress Detection
+Real
+200
+AI-Generated Content Detection
+Real
+200
+News Headline Engagement
+Real
+200
+Persuasive Argument Prediction
+Real
+200
+Retweet Prediction
+Real
+200
+Paper Citations (Health)
+Real
+244
+Paper Citations (NeurIPS)
+Real
+308
+Paper Citations (Radiology)
+Real
+392
+Shoe Sales
+Synthetic
+900
+College Admission
+Synthetic
+200
+Presidential Election
+Synthetic
+1,750
+Personality Prediction
+Synthetic
+1,750
+Table 1: HypoBench tasks used in our experiments.
+Baselines
+We compare HypoForge against two types of
+baselines: system-level scientific discovery approaches and
+skill-level variants.
+• System-level comparison. For hypothesis generation, we
+use HypoGeniC (Zhou et al. 2024), which provides an
+automated pipeline for hypothesis generation, and Hy-
+potheSAEs (Movva et al. 2025), which derives hypotheses
+by interpreting sparse autoencoder features from neural
+representations. For hypothesis testing, we include POP-
+PER (Huang et al. 2025), a scientific discovery frame-
+work that supports automated hypothesis validation, and
+ReAct (Yao et al. 2022), which enables LLM agents to
+iteratively reason, plan, and execute actions for experi-
+ment design and validation. In addition, we include LLM-
+ZeroShot and LLM-FewShot (Brown et al. 2020) as gen-
+eral LLM-based baselines for both tasks.
+• Skill-level comparison. We include three skill variants
+to compare the effectiveness of learned skills on both
+tasks. (1) No-Skill: removes the learned skill and uses only
+the original agent framework; (2) AI-Generated-Skill: re-
+places the learned skill with an LLM-generated procedu-
+
+
+--- PAGE 6 ---
+ral skill, without refinement through task-specific experi-
+ences or evaluation feedback; (3) Human-Designed-Skill:
+replaces the learned skill with a pre-defined manually
+specified skill without refinement. (K-Dense Inc. 2026)
+Metrics
+For hypothesis generation, we use Q(Ht) score to
+evaluate the quality of generated hypotheses, and Hit@K to
+measure the coverage of generated hypotheses against ref-
+erence hypotheses. For hypothesis testing, we evaluate the
+effectiveness of automatically generated experiments using
+Test Pass Rate Th and Execution Success Rate Eh. Th mea-
+sures the proportion of ground-truth hypotheses that are suc-
+cessfully validated by the generated experiments, where suc-
+cessful validation requires the experiment to execute suc-
+cessfully and achieve statistical significance (p < 0.05). Eh
+measures the proportion of experiments that successfully ex-
+ecute and produce valid results.
+Implementation Details
+We divide the selected Hy-
+poBench tasks into training and testing sets at a 1:1 ratio,
+where the training split is used for skill learning and the
+unseen test split is reserved for evaluation. All agents are
+instantiated with DeepSeek-V4-Flash (DeepSeek-AI 2026)
+as the backbone model. During training, skill updates are
+retained only when the corresponding learning objective im-
+proves; otherwise, the previous skill is preserved for subse-
+quent iterations, and the training process terminates when no
+improvement is observed for k consecutive attempts (k = 3).
+All reported results are averaged over three independent runs.
+Hypothesis Generation Evaluation
+We first evaluate the effectiveness of the hypothesis genera-
+tion stage on test tasks. All methods receive the same input
+(research problem and data source pairs), and their gener-
+ated hypotheses are evaluated using the same discriminator
+and reference hypotheses. We compare HypoForge with both
+system-level approachesand skill-levelvariantsasmentioned
+in the above baselines.
+Method
+Q(Ht) ↑
+Hit@K ↑
+HypoGeniC
+0.719 ± 0.014
+0.472 ± 0.050
+HypotheSAEs
+0.582 ± 0.043
+0.208 ± 0.038
+LLM-ZeroShot
+0.701 ± 0.006
+0.516 ± 0.029
+LLM-FewShot
+0.719 ± 0.007
+0.522 ± 0.022
+No-Skill
+0.724 ± 0.040
+0.409 ± 0.079
+AI-Generated-Skill
+0.738 ± 0.050
+0.579 ± 0.022
+Human-Designed-Skill
+0.761 ± 0.040
+0.497 ± 0.022
+HypoForge
+0.785 ± 0.030
+0.648 ± 0.142
+Table 2: Hypothesis generation performance.
+As shown in Table 2, HypoForge achieves the best perfor-
+mance among all compared methods, obtaining the highest
+hypothesis quality score (Q(Ht) = 0.785) and Hit Rate
+(0.648). Compared with system-level baselines, HypoForge
+improves Hit Rate over HypoGeniC and HypotheSAEs by
+17.6% and 44.0%, respectively, demonstrating its ability
+to generate hypotheses with stronger scientific quality and
+broader coverage of reference hypotheses. It also consis-
+tently outperforms LLM-based prompting baselines, indicat-
+ing that learned procedural skills provide more effective guid-
+ance than static instructions or few-shot demonstrations. For
+skill-level variants, removing skill learning from our frame-
+work decreases the Hit Rate from 0.648 to 0.409, while re-
+placing learned skills with AI-generated or human-designed
+skills also leads to performance degradation. These results
+reflect that the proposed adversarial hypothesis generation
+framework effectively improves the overall performance of
+the hypothesis generation stage by introducing discriminator-
+guided refinement.
+Hypothesis Testing Evaluation
+We then evaluate the hypothesis testing stage on test tasks
+using available ground-truth hypotheses. All methods are
+evaluated under the same experimental environment, where
+generated designs are executed on the provided datasets and
+assessed according to testing outcomes including experiment
+designs, experiment codes, and statistical results.
+Method
+Th ↑
+Eh ↑
+POPPER
+0.417 ± 0.141
+0.984 ± 0.000
+ReAct
+0.589 ± 0.078
+0.859 ± 0.051
+LLM-ZeroShot
+0.516 ± 0.014
+0.870 ± 0.030
+LLM-FewShot
+0.539 ± 0.008
+0.966 ± 0.005
+No-Skill
+0.562 ± 0.055
+0.885 ± 0.099
+AI-Generated-Skill
+0.555 ± 0.090
+0.891 ± 0.131
+Human-Designed-Skill
+0.612 ± 0.096
+0.911 ± 0.043
+HypoForge
+0.659 ± 0.064
+0.966 ± 0.016
+Table 3: Hypothesis testing performance on test tasks.
+As shown in Table 3, HypoForge achieves the highest
+test pass rate (Th = 0.659) while maintaining a com-
+petitive execution success rate (Eh = 0.966). Compared
+with system-level baselines, HypoForge substantially im-
+proves testing effectiveness over POPPER, ReAct, and LLM
+prompting methods, demonstrating the advantage of learn-
+ing experiment design and execution strategies from previ-
+ous testing trajectories. Notably, although POPPER achieves
+a higher execution success rate, its substantially lower
+test pass rate suggests that many of its generated experi-
+ments are technically executable but scientifically ineffective
+for validating the target hypotheses. Compared with skill-
+level variants, HypoForge consistently outperforms No-Skill,
+AI-Generated-Skill, and Human-Designed-Skill, confirming
+that task-specific feedback-driven skill refinement is crucial
+for improving scientific testing capability.
+Skill Learning Analysis
+To analyze how the proposed skill learning approach im-
+proves agent capabilities over iterations, we track the evolu-
+tion of evaluation metrics during the skill refinement process.
+Figure 2 shows the learning progress of hypothesis genera-
+tion and testing skills.
+For hypothesis generation, as shown in Figure 2a, both
+Q(Ht) and Hit@K exhibit an overall increasing trend across
+
+
+--- PAGE 7 ---
+(a) Hypothesis generation skill learning process.
+(b) Hypothesis testing skill learning process.
+Figure 2: Skill learning progress across refinement iterations.
+refinement iterations. Specifically, Q(Ht) improves from
+0.612 at the initial iteration to 0.808 after skill refinement,
+while Hit@K increases from 0.208 to 0.679, indicating that
+the learned skill enables the generator to produce hypotheses
+with not only higher scientific quality but also broader cover-
+age of reference hypotheses. Although the metrics fluctuate
+in several intermediate iterations, the overall improvement
+demonstrates that discriminator feedback provides effective
+signals for refining hypothesis construction strategies rather
+than merely selecting high-scoring outputs.
+For hypothesis testing, Figure 2b shows consistent im-
+provements in both testing effectiveness and execution cor-
+rectness. The Th rate increases from 0.395 to 0.669, while
+Eh improves from 0.516 to 1.000. This indicates that the
+learned testing skill progressively captures more effective
+experiment design and execution procedures.
+Ablation Study
+To evaluate the impact of refinement signals, we remove
+the corresponding supervision sources in both stages. For
+hypothesis generation, w/o Feedback removes discrimina-
+tor feedback during skill refinement. For hypothesis testing,
+w/o Outcome removes testing results during skill refinement,
+while retaining the generated hypotheses, experiment de-
+signs, and executable codes.
+As shown in Table 4, stage-specific refinement signals
+consistently improve performance. In hypothesis generation,
+the full model outperforms w/o Feedback in both Q(Ht)
+and Hit@K (0.785 vs. 0.726 and 0.648 vs. 0.491), show-
+ing that discriminator feedback effectively refines generation
+skills. In hypothesis testing, removing execution outcomes
+decreases Th from 0.659 to 0.565 while maintaining compa-
+Variant
+Q(Ht) ↑
+Hit@K ↑
+w/o Feedback
+0.726 ± 0.008
+0.491 ± 0.015
+Full
+0.785 ± 0.030
+0.648 ± 0.142
+Variant
+Th ↑
+Eh ↑
+w/o Outcome
+0.565 ± 0.084
+0.957 ± 0.039
+Full
+0.659 ± 0.064
+0.966 ± 0.016
+Table 4: Ablation study of skill learning.
+rable Eh, demonstrating the importance of empirical valida-
+tion signals for improving testing skills.
+Discussion
+Our framework demonstrates the potential of experience-
+guided skill learning to improve the performance of hypoth-
+esis generation and testing without updating the underly-
+ing agents and foundation models. Despite these advantages,
+several limitations remain: (1) the effectiveness of skill re-
+finement currently relies on the quantity and reliability of
+feedback information. Errors in hypothesis evaluation or in-
+sufficient ground-truth validation may lead to suboptimal
+skill updates. Future work could explore stronger scientific
+evaluators, multi-agent consensus mechanisms, or human-
+in-the-loop feedback to improve feedback reliability; (2) the
+current framework mainly focuses on data-driven scientific
+discovery with executable computational experiments. Ex-
+tending skill learning to domains involving complex theoret-
+ical reasoning, wet lab, or interdisciplinary knowledge inte-
+gration remains an important direction; (3)although learned
+skills may transfer across tasks, automatically determining
+the granularity, composition, and organization of scientific
+skills within a complex discovery pipeline remains an open
+challenge for achieving effective task performance.
+Conclusion
+In this work, we propose HypoForge, an experience-guided
+multi-agent framework for hypothesis generation and hypoth-
+esis testing in the scientific discovery process. Unlike existing
+AI scientist systems that treat discovery stages as indepen-
+dent tasks and rely on static model capabilities, HypoForge
+enables AI agents to continuously improve their capabilities
+by learning procedural skills from previous discovery expe-
+riences. Specifically, we introduce adversarial refinement for
+hypothesis generation, where discriminator-guided feedback
+helps distill effective hypothesis construction strategies with-
+out explicit supervision, and experience-guided refinement
+for hypothesis testing, where empirical validation outcomes
+improve experiment design and execution skills. Extensive
+experiments on scientific discovery benchmarks demonstrate
+that HypoForge consistently improves both hypothesis gen-
+eration and testing performance, while the learned skills gen-
+eralize across diverse scientific tasks. These results suggest
+a promising direction in autonomous scientific discovery:
+developing continually improving AI agent systems that ac-
+cumulate experience and progressively strengthen their ca-
+pabilities for scientific reasoning.
+
+
+--- PAGE 8 ---
+References
+Boiko, D. A.; MacKnight, R.; Kline, B.; and Gomes, G. 2023.
+Autonomous chemical research with large language models.
+Nature, 624(7992): 570–578.
+Brown, T.; Mann, B.; Ryder, N.; Subbiah, M.; Kaplan, J. D.;
+Dhariwal, P.; Neelakantan, A.; Shyam, P.; Sastry, G.; Askell,
+A.; et al. 2020. Language models are few-shot learners. Ad-
+vances in neural information processing systems, 33: 1877–
+1901.
+Brunnsåker, D.; Gower, A. H.; Naval, P.; Bjurström, E. Y.;
+Kronström, F.; Tiukova, I. A.; and King, R. D. 2025. Self-
+driven Biological Discovery through Automated Hypothesis
+Generation and Experimental Validation. bioRxiv, 2025–06.
+DeepSeek-AI. 2026. DeepSeek-V4: Towards Highly Efficient
+Million-Token Context Intelligence.
+Fortunato, S.; Bergstrom, C. T.; Börner, K.; Evans, J. A.;
+Helbing, D.; Milojević, S.; Petersen, A. M.; Radicchi, F.;
+Sinatra, R.; Uzzi, B.; et al. 2018. Science of science. Science,
+359(6379): eaao0185.
+Goodfellow, I. J.; Pouget-Abadie, J.; Mirza, M.; Xu, B.;
+Warde-Farley, D.; Ozair, S.; Courville, A.; and Bengio, Y.
+2014. Generative adversarial nets. Advances in neural infor-
+mation processing systems, 27.
+Gu, K.; Shang, R.; Jiang, R.; Kuang, K.; Lin, R.-J.; Lyu, D.;
+Mao, Y.; Pan, Y.; Wu, T.; Yu, J.; et al. 2024. Blade: Bench-
+marking language model agents for data-driven science. In
+Findings of the Association for Computational Linguistics:
+EMNLP 2024, 13936–13971.
+Gupta, J. S.; SI, H.; Singh, S. K.; Tawseeq, S. M.; Singla,
+Y. K.; Doermann, D.; Shah, R. R.; and Krishnamurthy,
+B. 2026. Accelerating Social Science Research via Agen-
+tic Hypothesization and Experimentation.
+arXiv preprint
+arXiv:2602.07983.
+Huang, K.; Jin, Y.; Li, R.; Li, M. Y.; Candès, E.;
+and Leskovec, J. 2025.
+Automated hypothesis valida-
+tion with agentic sequential falsifications.
+arXiv preprint
+arXiv:2502.09858.
+K-Dense Inc. 2026. Astropy Skill for Scientific Agent Skills.
+Version 1.0, part of Scientific Agent Skills.
+King, R. D.; Rowland, J.; Oliver, S. G.; Young, M.; Aubrey,
+W.; Byrne, E.; Liakata, M.; Markham, M.; Pir, P.; Soldatova,
+L. N.; et al. 2009.
+The automation of science.
+Science,
+324(5923): 85–89.
+Lakatos, I. 1978.
+The methodology of scientific research
+programmes: Volume 1: Philosophical papers, volume 1.
+Cambridge university press.
+Langley, P. 1987. Scientific discovery: Computational explo-
+rations of the creative processes. MIT press.
+Liu, H.; Huang, S.; Hu, J.; Zhou, Y.; and Tan, C. 2025. Hy-
+pobench: Towards systematic and principled benchmarking
+for hypothesis generation. arXiv preprint arXiv:2504.11524.
+Liu, Y.; Su, Z.; Xie, L.; Zhang, Y.; Zong, Q.; Guo, J.; Xie,
+Z.; Ji, Y.; Yim, Y.; Luo, H.; et al. 2026. SkillRevise: Improv-
+ing LLM-Authored Agent Skills via Trace-Conditioned Skill
+Revision. arXiv preprint arXiv:2606.01139.
+Madaan, A.; Tandon, N.; Gupta, P.; Hallinan, S.; Gao, L.;
+Wiegreffe, S.; Alon, U.; Dziri, N.; Prabhumoye, S.; Yang,
+Y.; et al. 2023. Self-refine: Iterative refinement with self-
+feedback. Advances in neural information processing sys-
+tems, 36: 46534–46594.
+Majumder, B. P.; Surana, H.; Agarwal, D.; Dalvi Mishra, B.;
+Meena, A.; Prakhar, A.; Vora, T.; Khot, T.; Sabharwal, A.;
+and Clark, P. 2025. Discoverybench: Towards data-driven
+discovery with large language models. In International Con-
+ference on Learning Representations, volume 2025, 4556–
+4579.
+Movva, R.; Peng, K.; Garg, N.; Kleinberg, J.; and Pierson, E.
+2025. Sparse autoencoders for hypothesis generation. arXiv
+preprint arXiv:2502.04382.
+Neuberg, L. G. 2003.
+Causality: models, reasoning, and
+inference, by judea pearl, cambridge university press, 2000.
+Econometric Theory, 19(4): 675–685.
+Packer, C.; Fang, V.; Patil, S.; Lin, K.; Wooders, S.; and
+Gonzalez, J. 2023. MemGPT: towards LLMs as operating
+systems.
+Park, J. S.; O’Brien, J.; Cai, C. J.; Morris, M. R.; Liang,
+P.; and Bernstein, M. S. 2023. Generative agents: Interac-
+tive simulacra of human behavior. In Proceedings of the
+36th annual acm symposium on user interface software and
+technology, 1–22.
+Popper, K. 2005. The logic of scientific discovery. Routledge.
+Shapere, D. 1964. The structure of scientific revolutions.
+The Philosophical Review, 73(3): 383–394.
+Shinn, N.; Cassano, F.; Gopinath, A.; Narasimhan, K.; and
+Yao, S. 2023. Reflexion: Language agents with verbal re-
+inforcement learning. Advances in neural information pro-
+cessing systems, 36: 8634–8652.
+Takagi, S.; Yamauchi, R.; and Kumagai, W. 2023. Towards
+autonomous hypothesis verification via language models
+with minimal guidance. arXiv preprint arXiv:2311.09706.
+Vishe, Y.; Surana, R.; Jiang, X.; Huang, Z.; Li, X.; Kuang,
+N. L.; Yu, T.; Rossi, R. A.; Shang, J.; McAuley, J.; et al. 2026.
+Skill-r1: Agent skill evolution via reinforcement learning.
+arXiv preprint arXiv:2605.09359.
+Wang, G.; Xie, Y.; Jiang, Y.; Mandlekar, A.; Xiao, C.; Zhu,
+Y.; Fan, L.; and Anandkumar, A. 2023a. Voyager: An open-
+ended embodied agent with large language models. arXiv
+preprint arXiv:2305.16291.
+Wang, H.; Fu, T.; Du, Y.; Gao, W.; Huang, K.; Liu, Z.; Chan-
+dak, P.; Liu, S.; Van Katwyk, P.; Deac, A.; et al. 2023b.
+Scientific discovery in the age of artificial intelligence. Na-
+ture, 620(7972): 47–60.
+Wang, J.; Yan, Q.; Wang, Y.; Tian, Y.; Mishra, S. S.; Xu, Z.;
+Gandhi, M.; Xu, P.; and Cheong, L. L. 2026. Reinforcement
+learning for self-improving agent with skill library. In Pro-
+ceedings of the 64th Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers), 1529–
+1550.
+Yang, J.; Jimenez, C. E.; Wettig, A.; Lieret, K.; Yao, S.;
+Narasimhan, K. R.; and Press, O. 2024. Swe-agent: Agent-
+computer interfaces enable automated software engineering.
+
+
+--- PAGE 9 ---
+In The Thirty-eighth Annual Conference on Neural Informa-
+tion Processing Systems.
+Yang, Y.; Gong, Z.; Huang, W.; Yang, Q.; Zhou, Z.; Huang,
+Z.; Li, Y.; Gao, X.; Dai, Q.; Liu, B.; et al. 2026. Skillopt: Ex-
+ecutive strategy for self-evolving agent skills. arXiv preprint
+arXiv:2605.23904.
+Yao, S.; Zhao, J.; Yu, D.; Du, N.; Shafran, I.; Narasimhan, K.;
+and Cao, Y. 2022. React: Synergizing reasoning and acting
+in language models. arXiv preprint arXiv:2210.03629.
+Zhang, H.; Fan, S.; Zou, H. P.; Chen, Y.; Wang, Z.; Zhou,
+J.; Li, C.; Huang, W.-C.; Yao, Y.; Zheng, K.; et al. 2026.
+Coevoskills: Self-evolving agent skills via co-evolutionary
+verification. arXiv preprint arXiv:2604.01687.
+Zhou, Y.; Liu, H.; Srivastava, T.; Mei, H.; and Tan, C.
+2024. Hypothesis generation with large language models.
+In Proceedings of the 1st Workshop on NLP for Science
+(NLP4Science), 117–139.

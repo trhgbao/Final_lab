@@ -1,0 +1,502 @@
+Title: Live Content
+Description: Fetched live
+Source: https://ar5iv.labs.arxiv.org/html/2406.02509
+---
+[2406.02509] CamCo: Camera-Controllable 3D-Consistent Image-to-Video Generation
+CamCo: Camera-Controllable 3D-Consistent Image-to-Video Generation
+Dejia Xu     Weili Nie     Chao Liu
+Affiliation:
+University of Texas at Austin,
+Affiliation:
+NVIDIA
+Affiliation:
+NVIDIA
+Sifei Liu     Jan Kautz     Zhangyang Wang     Arash Vahdat
+Affiliation:
+University of Texas at Austin,
+Affiliation:
+NVIDIA
+Affiliation:
+NVIDIA
+Affiliation:
+NVIDIA
+Abstract
+Recently video diffusion models have emerged as expressive generative tools for high-quality video content creation readily available to general users. However, these models often do not offer precise control over camera poses for video generation, limiting the expression of cinematic language and user control.
+To address this issue, we introduce
+CamCo
+, which allows fine-grained
+Cam
+era pose
+Co
+ntrol for image-to-video generation.
+We equip a pre-trained image-to-video generator with accurately parameterized camera pose input using Plücker coordinates. To enhance 3D consistency in the videos produced, we integrate an epipolar attention module in each attention block that enforces epipolar constraints to the feature maps. Additionally, we fine-tune CamCo on real-world videos with camera poses estimated through structure-from-motion algorithms to better synthesize object motion.
+Our experiments show that CamCo significantly improves 3D consistency and camera control capabilities compared to previous models while effectively generating plausible object motion.
+Project page:
+https://ir1d.github.io/CamCo/
+.
+Figure 1:
+Given a single frame (the first image column) and a sequence of cameras as input, our CamCo model is able to synthesize videos that follow the camera conditions with 3D consistency. We support indoor, outdoor, object-centric, and text-to-image generated images. The prompt for the last row is “A lush garden filled with blooming roses of various colors, with a gravel path winding through it”. The camera of the first frame starts from world origin, shown in purple.
+1
+Introduction
+The rapid evolution of diffusion-based generative models
+rombach2022high
+;
+imagen
+;
+ramesh2021zero
+;
+ramesh2022hierarchical
+;
+betker2023improving
+has empowered general users to generate video content from textual or visual inputs easily.
+Recent advancements in video generative models
+khachatryan2023text2video
+;
+videoldm
+;
+svd
+;
+guo2023animatediff
+have underscored the importance of user control
+wu2023tune
+;
+guo2023animatediff
+;
+guo2023sparsectrl
+;
+peruzzo2024vase
+over the generated content. Rather than relying on the cumbersome and error-prone process of prompt engineering, controllable generation techniques ensure that the output adheres to more specified and fine-grained control signals, thereby enhancing user satisfaction by producing more desirable outcomes.
+Recent studies
+controlnet
+;
+li2023gligen
+;
+mou2024t2i
+have incorporated additional training layers to integrate these control signals, further refining content generation capabilities.
+Despite the diverse control signals available (e.g., depth, edge map, human pose)
+wu2023tune
+;
+guo2023animatediff
+;
+guo2023sparsectrl
+;
+peruzzo2024vase
+;
+controlnet
+;
+li2023gligen
+;
+mou2024t2i
+, controlling camera viewpoints in generated content has received little attention.
+Camera motion, a crucial filmmaking technique
+nielsen2007camera
+, enables content creators to shift the audience’s perspective without cutting the scene
+sikov2020film
+, thereby conveying emotional states effectively
+yilmaz2023embodiment
+. This technique is vital for ensuring that videos are practically usable in downstream applications such as augmented reality, filmmaking, and game development
+heimann2014moving
+. It allows creators to communicate more dynamically with their audience and adhere to a pre-designed script or storyboard.
+To enable camera control in content generation, early methods
+guo2023animatediff
+;
+guo2023sparsectrl
+utilize a fixed number of categories to represent camera trajectories, providing a coarse control over the camera motion. They use LoRA
+hu2021lora
+to fuse the camera information and conditionally generate videos that belong to certain categories of camera motion. To improve the camera motion granularity,
+wang2023motionctrl
+has proposed to use adapter layers to accept normalized camera extrinsic matrices.
+However, this approach uses one-dimensional numeric values to represent the camera pose, which struggles to precisely control the video content when provided with complex camera motion.
+To overcome the above issues, we introduce
+CamCo
+, a
+cam
+era-
+co
+ntrollable image-to-video generation framework that produces 3D-consistent videos.
+Our framework is built upon a pre-trained image-to-video diffusion model, preserving the majority of the original model parameters to maintain its generative capabilities.
+To enhance the accuracy of camera motion control, we represent camera pose with Plücker coordinates that encode both camera intrinsics and extrinsics into a pixel-wise embedding, which is a dense conditioning signal for video generation.
+Moreover, to improve the geometric consistency of synthesized videos, we introduce a new epipolar constraint attention module in each attention block to enforce epipolar constraints across frames.
+Finally, we implement a data curation pipeline that annotates in-the-wild video frames with estimated camera poses, enhancing our capability of generating videos with large object motions.
+Our experiments on various domains demonstrate that
+CamCo
+outperforms previous state-of-the-art methods in terms of visual quality, camera controllability, and geometry consistency.
+Our contributions can be summarized as follows,
+•
+We propose
+CamCo
+, a novel
+cam
+era-
+co
+ntrollable image-to-video generation framework that can generate high-quality, 3D-consistent videos.
+•
+We build the first 3D-consistent video diffusion model by adapting a pre-trained image-to-video diffusion model. We parameterize camera information via Plücker coordinates and incorporate epipolar constraints via new epipolar constraint attention modules.
+•
+We introduce a data curation pipeline to handle in-the-wild videos with dynamic subjects and fine-tune CamCo on the curated dataset to enhance its ability to generate videos with both camera ego-motion and dynamic subjects.
+•
+Our method exhibits superior 3D consistency, visual quality, and camera controllability when compared with previous works.
+2
+Related Work
+2.1
+Diffusion-based Video Generation
+The recent advances in diffusion models
+rombach2022high
+;
+imagen
+;
+ramesh2021zero
+;
+ramesh2022hierarchical
+;
+betker2023improving
+have provided users with enhanced flexibility in visualizing their imaginations. Leveraging large-scale image-text paired datasets
+schuhmann2022laion
+;
+kakaobrain2022coyo-700m
+, diffusion models have become the state-of-the-art generators for text-to-image (T2I) synthesis. However, due to the lack of high-quality video-text datasets
+svd
+;
+videoldm
+, researchers have extensively explored adapting text-to-image generators into text-to-video (T2V) generators.
+Text2Video-Zero
+khachatryan2023text2video
+builds the first training-free video generation pipeline. AnimateDiff
+guo2023animatediff
+constructs a motion module applicable to various base T2I models. VideoLDM
+videoldm
+and SVD
+svd
+inflate the T2I models with additional temporal layers and train on curated datasets to improve the visual quality.
+The recently released Sora model
+sora
+has demonstrated impressive video generation results, drawing attention to transformer-based diffusion backbones
+peebles2023scalable
+;
+ma2024latte
+;
+yu2023magvit
+;
+yu2024efficient
+.
+Our work builds upon the open-source SVD
+svd
+model. We introduce novel camera conditioning and geometry-aware blocks to achieve camera controllability and geometry consistency for the challenging image-to-video generation task.
+2.2
+Controllable Content Creation
+Along with the rapid development of generative models that produce content from various input modalities, improving user control over generation has also attracted significant attention.
+ControlNet
+controlnet
+, T2I-adapter
+mou2024t2i
+, and GLIGEN
+li2023gligen
+pioneered the introduction of control signals, including depth, edge maps, semantic maps, and object bounding boxes, to text-to-image generation. These approaches ensure the synthesis backbone
+rombach2022high
+remains intact while adding trainable modules to maintain both control and generative capabilities.
+Similar approaches have been applied to video generation, supporting controls like depth, bounding boxes, and semantic maps
+guo2023animatediff
+;
+guo2023sparsectrl
+;
+wu2023tune
+;
+peruzzo2024vase
+. However, controlling camera motion has received limited attention.
+AnimateDiff
+guo2023animatediff
+and SVD
+svd
+explore class-conditioned video generation, clustering camera movements, and using LoRA
+hu2021lora
+modules to generate specific camera motions. MotionCtrl
+wang2023motionctrl
+enhances control by employing camera extrinsic matrices as conditioning signals. While effective for simple trajectories, their reliance on 1D numeric values results in imprecise control in complex real-world scenarios.
+Our work significantly improves granularity and accuracy in camera control by introducing Plücker coordinates and geometry-aware layers to image-to-video generation. Concurrently, CameraCtrl
+he2024cameractrl
+also employs Plücker coordinates but focuses on the text-to-video generation while paying less attention to 3D consistency.
+2.3
+3D Scene Synthesis
+Due to the lack of high-quality 3D scene datasets
+deitke2023objaverse
+;
+deitke2023objaverse2
+, it is challenging to adapt the success of image and video generation
+betker2023improving
+;
+ramesh2021zero
+;
+rombach2022high
+;
+imagen
+;
+yu2023magvit
+;
+yu2024efficient
+into 3D generation tasks
+liu2023zero
+;
+shi2023zero123++
+. DreamFusion
+poole2022dreamfusion
+addresses this issue by introducing score distillation sampling, which distills knowledge from 2D diffusion models.
+This technique has been successfully applied to 3D object synthesis from text
+lin2023magic3d
+;
+tang2023dreamgaussian
+;
+wang2023taming
+and image
+xu2022neurallift
+;
+liu2023zero
+;
+shi2023zero123++
+input.
+However, due to the limited ability of 2D diffusion models to generate complex scenes, score distillation is not directly applicable to scene generation. Consequently, compositional generation
+po2023compositional
+;
+zhang2023scenewiz3d
+;
+xu2024comp4d
+;
+gao2023graphdreamer
+has emerged as a popular approach to tackle these challenges.
+Video generators
+voleti2024sv3d
+;
+melas20243d
+;
+zuo2024videomv
+have also been adapted to generate simple objects by conditioning the three degrees of freedom (DoF) camera information on the time embeddings of diffusion models.
+However, these approaches are not directly applicable to real-world scenarios because their simplifications of camera information do not suffice for real videos that contain diverse extrinsic and intrinsic parameters.
+Our work focuses on generating 3D-consistent videos from in-the-wild images, providing insights into the challenging direction of 3D scene synthesis.
+3
+Method
+Figure 2:
+Overview of our proposed CamCo framework. (a) shows the architecture, where we introduce Plücker coordinates as an effective camera parameterization and an epipolar constraint attention block to enforce geometry consistency. (b) illustrates our epipolar constraint attention block.
+For each queried pixel via grid sampling from the
+i
+i
+-th frame
+z
+t
+i
+z_{t}^{i}
+, we gather information from the corresponding epipolar line in the source frame
+z
+t
+1
+z_{t}^{1}
+using a cross-attention layer. The features
+E
+t
+i
+E^{i}_{t}
+along the latent space epipolar line encode the local regions around it in the image space.
+In this section, we present our novel method for generating camera-controllable, geometry-consistent videos, as shown in Fig.
+2
+. First, we outline the preliminaries of the pre-trained image-to-video diffusion model. Then, we introduce our camera parameterization and control modules, which integrate camera control into the pre-trained video diffusion model. Further, we describe our epipolar constraint attention mechanism, ensuring the geometric consistency of generated videos. Finally, we discuss how to curate data annotations to generate object motion effectively.
+3.1
+Image-to-video Generation
+Problem Setting
+The task of image-to-video generation involves using a single image
+I
+0
+I_{0}
+as input of a video generator to produce a sequence of output frames
+O
+1
+,
+⋯
+,
+O
+n
+O_{1},\cdots,O_{n}
+with temporal consistency. In our experiments,
+n
+n
+is typically set to 14. To add camera control, we retain the original input and output format while additionally introducing a set of camera information
+C
+1
+,
+⋯
+,
+C
+n
+C_{1},\cdots,C_{n}
+. These camera parameters
+C
+i
+{C_{i}}
+are used as fine-grained conditioning of the video generator, ensuring that the generated frames follow the viewpoint changes specified by the camera sequence.
+Base Model Architecture
+We train our CamCo based on a publicly available pre-trained image-to-video diffusion model, Stable Video Diffusion (SVD)
+svd
+. SVD is built upon Stable Diffusion 2.1 model
+rombach2022high
+that is originally trained through an EDM
+karras2022elucidating
+framework.
+SVD inserts temporal convolution and attention layers after spatial layers following VideoLDM
+videoldm
+.
+Unlike previous works that only train the temporal layers
+videoldm
+;
+guo2023animatediff
+or are training-free
+khachatryan2023text2video
+, SVD fine-tunes all parameters.
+Training
+SVD incorporates a continuous-time noise scheduler
+karras2022elucidating
+, which supports a continuous range of noise levels. The diffusion model learns to gradually denoise a high-variance Gaussian noise towards the (video) data distribution
+𝐱
+0
+∼
+p
+0
+\mathbf{x}_{0}\sim p_{0}
+. Let
+p
+⁡
+(
+𝐱
+,
+σ
+⁡
+(
+t
+)
+)
+p(\mathbf{x};\sigma(t))
+denote the marginal probability of noisy data
+𝐱
+t
+=
+𝐱
+0
++
+𝐧
+⁡
+(
+t
+)
+\mathbf{x}_{t}=\mathbf{x}_{0}+\mathbf{n}(t)
+where the added Gaussian noise
+𝐧
+⁡
+(
+t
+)
+∼
+𝒩
+⁡
+(
+0
+,
+σ
+2
+​
+(
+t
+)
+​
+𝐈
+)
+\mathbf{n}(t)\sim\mathcal{N}(0,\sigma^{2}(t)\mathbf{I})
+, the iterative denoising process corresponds to the probability flow ordinary differential equation (ODE):
+d
+​
+𝐱
+=
+−
+σ
+˙
+​
+(
+t
+)
+​
+σ
+​
+(
+t
+)
+​
+∇
+𝐱
+​
+log
+⁡
+p
+⁡
+(
+𝐱
+,
+σ
+⁡
+(
+t
+)
+)
+​
+d
+​
+t
+,
+d\mathbf{x}=-\dot{\sigma}(t)\sigma(t)\nabla_{\mathbf{x}}\log p(\mathbf{x};\sigma(t))dt,
+(1)
+where
+∇
+𝐱
+​
+log
+​
+p
+​
+(
+𝐱
+,
+σ
+⁡
+(
+t
+)
+)
+\nabla_{\mathbf{x}}\log p(\mathbf{x};\sigma(t))
+is the score function parameterized by a neural network
+D
+𝜽
+D_{\boldsymbol{\theta}}
+through
+∇
+𝐱
+​
+log
+​
+p
+​
+(
+𝐱
+,
+σ
+)
+≈
+(
+D
+𝜽
+​
+(
+𝐱
+,
+σ
+)
+−
+𝐱
+)
+/
+σ
+2
+\nabla_{\mathbf{x}}\log p(\mathbf{x};\sigma)\approx\left(D_{

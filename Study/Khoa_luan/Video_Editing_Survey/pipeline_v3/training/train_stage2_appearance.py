@@ -72,7 +72,8 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--dora_r", type=int, default=16, help="Rank of Stage 1 DoRA to match checkpoint")
     parser.add_argument("--dora_alpha", type=float, default=32.0, help="Alpha of Stage 1 DoRA to match checkpoint")
-    parser.add_argument("--save_steps", type=int, default=100)
+    parser.add_argument("--save_steps", type=int, default=50)
+    parser.add_argument("--log_steps", type=int, default=50, help="Print training progress every N steps")
     parser.add_argument("--max_train_steps", type=int, default=-1, help="Max training steps (-1 for unlimited by epochs)")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to Stage 2 checkpoint to resume training from")
     parser.add_argument("--resume_step", type=int, default=0, help="Initial step to resume counting from")
@@ -382,6 +383,9 @@ def train():
     print(f"    • Target Max Step: {target_max_step if target_max_step > 0 else 'Theo epochs'}")
     print(f"    • Số steps cần chạy trong phiên này: {steps_to_train if steps_to_train > 0 else total_epochs * len(dataloader)} ({total_epochs} epochs, {len(dataloader)} samples/epoch)")
 
+    running_loss = 0.0
+    log_count = 0
+
     for epoch in range(total_epochs):
         progress_bar = tqdm(dataloader, desc=f"Stage 2 Epoch {epoch+1}/{total_epochs}")
         for batch in progress_bar:
@@ -449,17 +453,29 @@ def train():
 
             global_step += 1
             current_total_step = start_step + global_step
-            progress_bar.set_postfix({"loss": loss.item() * args.gradient_accumulation_steps, "step": current_total_step})
+            loss_val = loss.item() * args.gradient_accumulation_steps
+            running_loss += loss_val
+            log_count += 1
+            progress_bar.set_postfix({"loss": f"{loss_val:.4f}", "step": current_total_step})
+
+            # In thông tin huấn luyện định kỳ mỗi args.log_steps (mặc định 50 steps), hoặc ở step đầu tiên / cuối cùng
+            if args.log_steps > 0 and (current_total_step % args.log_steps == 0 or global_step == 1 or (target_max_step > 0 and current_total_step >= target_max_step)):
+                avg_loss = running_loss / max(log_count, 1)
+                lr_curr = optimizer.param_groups[0]["lr"]
+                print(f"🚀 [Stage 2 Train] Step {current_total_step:04d}/{target_max_step} | Loss: {loss_val:.4f} (Avg: {avg_loss:.4f}) | LR: {lr_curr:.2e} | Epoch {epoch+1}/{total_epochs}", flush=True)
+                running_loss = 0.0
+                log_count = 0
 
             # Save Checkpoint with rolling cleanup to save disk space
             if args.save_steps > 0 and (current_total_step % args.save_steps == 0 or global_step % args.save_steps == 0):
                 save_path = os.path.join(args.output_dir, f"dora_stage2_step{current_total_step}.pt")
                 transformer.save_stage2_checkpoint(save_path)
+                print(f"\n💾 [Checkpoint Saved] Đã lưu checkpoint: {os.path.basename(save_path)} (Step: {current_total_step})", flush=True)
                 if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
                     if last_checkpoint_path and os.path.exists(last_checkpoint_path) and last_checkpoint_path != save_path:
                         try:
                             os.remove(last_checkpoint_path)
-                            print(f"\n--> [Disk Cleanup] Đã giải phóng bộ nhớ, xóa checkpoint cũ: {os.path.basename(last_checkpoint_path)}")
+                            print(f"--> [Disk Cleanup] Đã giải phóng bộ nhớ, xóa checkpoint cũ: {os.path.basename(last_checkpoint_path)}", flush=True)
                         except Exception:
                             pass
                     last_checkpoint_path = save_path
