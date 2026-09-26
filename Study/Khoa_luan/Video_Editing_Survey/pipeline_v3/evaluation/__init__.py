@@ -8,5 +8,6 @@ Evaluation suite for Pipeline v3:
 """
 
 from .show_comparator import show
+from .generate_mobile_comparison import generate_comparison_html, run_comparison_pipeline
 
-__all__ = ["show"]
+__all__ = ["show", "generate_comparison_html", "run_comparison_pipeline"]
