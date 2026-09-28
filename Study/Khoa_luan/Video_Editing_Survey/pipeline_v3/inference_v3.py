@@ -113,6 +113,29 @@ def save_video(tensor_data, save_path: str, fps: int = 10, quiet: bool = False):
         frame_bgr = cv2.cvtColor(arr[i], cv2.COLOR_RGB2BGR)
         out.write(frame_bgr)
     out.release()
+
+    # Re-encode to standard web-compatible H.264 (yuv420p) if ffmpeg is available
+    import shutil
+    import subprocess
+    ffmpeg_bin = shutil.which("ffmpeg") or ("/usr/bin/ffmpeg" if os.path.exists("/usr/bin/ffmpeg") else None)
+    if ffmpeg_bin:
+        temp_path = save_path.replace(".mp4", "_raw.mp4")
+        try:
+            if os.path.exists(save_path):
+                os.replace(save_path, temp_path)
+                cmd = [
+                    ffmpeg_bin, "-y", "-loglevel", "error",
+                    "-i", temp_path,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    save_path
+                ]
+                subprocess.run(cmd, check=True)
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        except Exception:
+            if os.path.exists(temp_path) and not os.path.exists(save_path):
+                os.replace(temp_path, save_path)
+
     if not quiet:
         print(f"--> Saved video to {save_path}")
 
@@ -137,6 +160,65 @@ def resolve_transformer_dir(base_dir: str) -> str:
     for root, dirs, files in os.walk(base_dir):
         if "config.json" in files and any(f.endswith(".safetensors") or f.endswith(".bin") for f in files):
             return root
+    return base_dir
+
+
+def auto_resolve_model_name(base_dir: str) -> str:
+    """Auto-detects CogVideoX-Fun InP weights across Kaggle datasets and local directories."""
+    if os.path.exists(base_dir):
+        resolved = resolve_dir_with_target(base_dir, "vae", "config.json")
+        if os.path.exists(os.path.join(resolved, "vae", "config.json")):
+            return resolved
+
+    candidates = [
+        "/kaggle/input/datasets/tranbao0105/cogvideox-fun-components/CogVideoX-Fun-V1.1-5b-InP",
+        "/kaggle/input/datasets/nguynngcnhntrng/cogvideox-fun-inp",
+        "/kaggle/input/cogvideox-fun-inp",
+        "/kaggle/input/cogvideox-fun-v1-1-5b-inp",
+        "./checkpoints/CogVideoX-Fun-V1.1-5b-InP",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            resolved = resolve_dir_with_target(c, "vae", "config.json")
+            if os.path.exists(os.path.join(resolved, "vae", "config.json")):
+                print(f"[*] [Auto-Detect] Found CogVideoX-Fun InP at: {resolved}")
+                return resolved
+
+    if os.path.exists("/kaggle/input"):
+        for root, dirs, files in os.walk("/kaggle/input"):
+            if "vae" in dirs and os.path.exists(os.path.join(root, "vae", "config.json")):
+                print(f"[*] [Auto-Detect Scan] Found CogVideoX-Fun InP at: {root}")
+                return root
+
+    return base_dir
+
+
+def auto_resolve_transformer_path(base_dir: str) -> str:
+    """Auto-detects TrajectoryCrafter weights across Kaggle datasets and local directories."""
+    if os.path.exists(base_dir):
+        resolved = resolve_transformer_dir(base_dir)
+        if os.path.exists(os.path.join(resolved, "config.json")):
+            return resolved
+
+    candidates = [
+        "/kaggle/input/datasets/tranbao0105/trajectorycrafter-weights/TrajectoryCrafter",
+        "/kaggle/input/datasets/nguynngcnhntrng/trajectorycrafter",
+        "/kaggle/input/trajectorycrafter",
+        "./checkpoints/TrajectoryCrafter",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            resolved = resolve_transformer_dir(c)
+            if os.path.exists(os.path.join(resolved, "config.json")):
+                print(f"[*] [Auto-Detect] Found TrajectoryCrafter weights at: {resolved}")
+                return resolved
+
+    if os.path.exists("/kaggle/input"):
+        for root, dirs, files in os.walk("/kaggle/input"):
+            if "trajectorycrafter" in root.lower() and "config.json" in files and any(f.endswith(".safetensors") or f.endswith(".bin") for f in files):
+                print(f"[*] [Auto-Detect Scan] Found TrajectoryCrafter at: {root}")
+                return root
+
     return base_dir
 
 
@@ -165,32 +247,35 @@ class PipelineV3:
         # 1. 3D Warper
         self.warper = Warper3D(resolution=tuple(opts.sample_size), device=self.device)
 
-        # 2. Setup Diffusion Pipeline
-        self._setup_pipeline()
+        # 2. Setup Diffusion Pipeline (only if not scaffold_only)
+        if not getattr(opts, "scaffold_only", False):
+            self._setup_pipeline()
 
     def _setup_pipeline(self):
         opts = self.opts
         # Auto-resolve nested directory paths
-        opts.model_name = resolve_dir_with_target(opts.model_name, "vae", "config.json")
-        opts.transformer_path = resolve_transformer_dir(opts.transformer_path)
+        opts.model_name = auto_resolve_model_name(opts.model_name)
+        opts.transformer_path = auto_resolve_transformer_path(opts.transformer_path)
 
+        local_only = os.path.exists(opts.model_name)
         if not self.quiet:
-            print(f"--> Loading VAE, Text Encoder & Scheduler from {opts.model_name}...")
+            print(f"--> Loading VAE, Text Encoder & Scheduler from {opts.model_name} (local_files_only={local_only})...")
         vae = AutoencoderKLCogVideoX.from_pretrained(
-            opts.model_name, subfolder="vae", local_files_only=True
+            opts.model_name, subfolder="vae", local_files_only=local_only
         ).to(self.weight_dtype)
         text_encoder = T5EncoderModel.from_pretrained(
-            opts.model_name, subfolder="text_encoder", torch_dtype=self.weight_dtype, local_files_only=True
+            opts.model_name, subfolder="text_encoder", torch_dtype=self.weight_dtype, local_files_only=local_only
         )
 
-        scheduler = DDIMScheduler.from_pretrained(opts.model_name, subfolder="scheduler", local_files_only=True)
+        scheduler = DDIMScheduler.from_pretrained(opts.model_name, subfolder="scheduler", local_files_only=local_only)
 
         # 3. Load Transformer (Official SOTA weights or Base + DoRA + Stage 2)
-        if opts.use_official_weights:
+        local_trans_only = os.path.exists(opts.transformer_path)
+        if getattr(opts, "use_official_weights", False):
             if not self.quiet:
                 print(f"--> Loading CrossTransformer3D from official SOTA baseline: {opts.transformer_path}...")
             transformer = CrossTransformer3DModel.from_pretrained(
-                opts.transformer_path, local_files_only=True
+                opts.transformer_path, local_files_only=local_trans_only
             ).to(self.weight_dtype)
         else:
             base_trans_path = getattr(opts, "base_transformer_path", None)
@@ -222,9 +307,10 @@ class PipelineV3:
             ).to(self.weight_dtype)
 
         # Load DoRA checkpoint if provided
-        if opts.dora_checkpoint and os.path.exists(opts.dora_checkpoint):
+        dora_ckpt = getattr(opts, "dora_checkpoint", None)
+        if dora_ckpt and os.path.exists(dora_ckpt):
             if not self.quiet:
-                print(f"--> Loading trained DoRA checkpoint from {opts.dora_checkpoint}...")
+                print(f"--> Loading trained DoRA checkpoint from {dora_ckpt}...")
             dora_r = getattr(opts, "dora_r", 16)
             dora_alpha = getattr(opts, "dora_alpha", 32.0)
             transformer.enable_dora(r=dora_r, lora_alpha=dora_alpha)
@@ -276,7 +362,7 @@ class PipelineV3:
             print(f"\n[Execution] Retargeting Camera: Pitch={theta}°, Pan={phi}°, Distance={r}, dX={x}, dY={y}")
 
         # 1. Read input frames
-        frames = read_video_frames(video_path, opts.video_length, opts.stride, tuple(opts.sample_size))
+        frames = read_video_frames(video_path, opts.video_length, getattr(opts, "stride", 1), tuple(opts.sample_size))
         frames_tensor = torch.from_numpy(frames).permute(0, 3, 1, 2).to(self.device) * 2.0 - 1.0  # (F, 3, H, W) in [-1, 1]
         frames_tensor = F.interpolate(frames_tensor, size=opts.sample_size, mode="bilinear", align_corners=False)
 
@@ -288,8 +374,9 @@ class PipelineV3:
 
         # Check explicit path or cache
         found_cache = None
-        if opts.depth_path and os.path.exists(opts.depth_path):
-            found_cache = opts.depth_path
+        depth_path = getattr(opts, "depth_path", None)
+        if depth_path and os.path.exists(depth_path):
+            found_cache = depth_path
         elif cache_path and os.path.exists(cache_path):
             found_cache = cache_path
         else:
@@ -390,30 +477,94 @@ class PipelineV3:
         )
 
         # 4. 3D Forward Warping Loop
-        if not self.quiet:
-            print("--> Warping point cloud to target camera trajectory...")
-        warped_images = []
-        masks = []
-        heal_holes = not getattr(opts, "no_heal_holes", False)
-        heal_hole_size = getattr(opts, "heal_hole_size", 25)
-        for i in tqdm(range(opts.video_length), desc="Point Cloud Splatting", disable=self.quiet):
-            w_img, w_mask, _ = self.warper.forward_warp(
-                frames_tensor[i : i + 1],
-                None,
-                depths_tensor[i : i + 1],
-                pose_s[i : i + 1],
-                pose_t[i : i + 1],
-                K[0:1],
-                K[i : i + 1],
-                clean_mask=opts.clean_mask,
-                heal_holes=heal_holes,
-                max_hole_area=heal_hole_size,
-            )
-            warped_images.append(w_img)
-            masks.append(w_mask)
+        use_ak = getattr(opts, "use_ak_scaffold", False)
+        use_mfs = getattr(opts, "use_mfs_scaffold", False)
 
-        cond_video = (torch.cat(warped_images) + 1.0) / 2.0  # (F, 3, H, W) in [0, 1]
-        cond_masks = torch.cat(masks)                        # (F, 1, H, W)
+        if use_ak:
+            if not self.quiet:
+                print("--> [AK-Scaffold] Warping with Adaptive Keyframe Occlusion Infilling...")
+            try:
+                from .geometry.adaptive_scaffold import AdaptiveKeyframeScaffold
+            except (ImportError, ValueError):
+                try:
+                    from pipeline_v3.geometry.adaptive_scaffold import AdaptiveKeyframeScaffold
+                except ImportError:
+                    from geometry.adaptive_scaffold import AdaptiveKeyframeScaffold
+
+            ak_engine = AdaptiveKeyframeScaffold(
+                hole_threshold=getattr(opts, "ak_hole_threshold", 0.05),
+                lambda_smooth=getattr(opts, "ak_lambda_smooth", 0.35),
+                feather_radius=getattr(opts, "ak_feather_radius", 5),
+                device=str(self.device),
+                dtype=self.weight_dtype,
+            )
+            warped_imgs_tensor, masks_tensor = ak_engine.run(
+                frames=frames_tensor,
+                depths=depths_tensor,
+                poses_src=pose_s,
+                poses_tgt=pose_t,
+                intrinsics=K,
+                quiet=self.quiet,
+            )
+            cond_video = (warped_imgs_tensor + 1.0) / 2.0  # (F, 3, H, W) in [0, 1]
+            cond_masks = masks_tensor                      # (F, 1, H, W)
+        else:
+            if not self.quiet:
+                if use_mfs:
+                    print("--> [Experimental] Warping with Multi-Frame Priority Scaffold (MFS-Scaffold)...")
+                else:
+                    print("--> Warping point cloud to target camera trajectory (Default Single-Frame 3D Scaffold)...")
+
+            warped_images = []
+            masks = []
+            heal_holes = not getattr(opts, "no_heal_holes", False)
+            heal_hole_size = getattr(opts, "heal_hole_size", 25)
+
+            for i in tqdm(
+                range(opts.video_length),
+                desc="MFS 3D Splatting" if use_mfs else "Point Cloud Splatting",
+                disable=self.quiet,
+            ):
+                if use_mfs:
+                    w_img, w_mask, _ = self.warper.multi_frame_forward_warp(
+                        frames=frames_tensor,
+                        depths=depths_tensor,
+                        transformation_s=pose_s,
+                        transformation_t=pose_t,
+                        intrinsic_s=K,
+                        intrinsic_t=K,
+                        target_idx=i,
+                        neighbor_radius=getattr(opts, "neighbor_radius", 3),
+                        use_all_frames=not getattr(opts, "no_use_all_frames", False),
+                        cull_grazing_angles=not getattr(opts, "no_cull_grazing", False),
+                        max_grazing_angle=getattr(opts, "max_grazing_angle", 55.0),
+                        filter_depth_edges=not getattr(opts, "no_depth_edge_filter", False),
+                        align_depth_scale=not getattr(opts, "no_align_depth_scale", False),
+                        clean_mask=opts.clean_mask,
+                        heal_holes=heal_holes,
+                        max_hole_area=heal_hole_size,
+                    )
+                else:
+                    # Default Legacy: Single-frame 2.5D splatting
+                    w_img, w_mask, _ = self.warper.forward_warp(
+                        frames_tensor[i : i + 1],
+                        None,
+                        depths_tensor[i : i + 1],
+                        pose_s[i : i + 1],
+                        pose_t[i : i + 1],
+                        K[0:1],
+                        K[i : i + 1],
+                        clean_mask=opts.clean_mask,
+                        heal_holes=heal_holes,
+                        max_hole_area=heal_hole_size,
+                        cull_grazing_angles=False,
+                        filter_depth_edges=False,
+                    )
+                warped_images.append(w_img)
+                masks.append(w_mask)
+
+            cond_video = (torch.cat(warped_images) + 1.0) / 2.0  # (F, 3, H, W) in [0, 1]
+            cond_masks = torch.cat(masks)                        # (F, 1, H, W)
 
         # Reference frames: Uniformly sampled across entire video (0 to 48) so future objects are visible to Stage 2!
         frames_clean = (frames_tensor.permute(1, 0, 2, 3).unsqueeze(0) + 1.0) / 2.0  # (1, 3, F, H, W)
@@ -427,10 +578,24 @@ class PipelineV3:
         cond_video_in = cond_video.permute(1, 0, 2, 3).unsqueeze(0)                   # (1, 3, F, H, W)
         cond_masks_in = (1.0 - cond_masks.permute(1, 0, 2, 3).unsqueeze(0)) * 255.0  # 255 for holes
 
+        # Determine output file tag
+        tag = getattr(opts, "tag", None)
+        if tag is None:
+            file_suffix = f"pan_{int(phi)}"
+        else:
+            file_suffix = str(tag)
+
         # Save Warped scaffold & Mask
         os.makedirs(opts.out_dir, exist_ok=True)
-        save_video(cond_video.permute(0, 2, 3, 1), os.path.join(opts.out_dir, f"render_pan_{int(phi)}.mp4"), fps=opts.fps, quiet=self.quiet)
-        save_video(cond_masks.repeat(1, 3, 1, 1).permute(0, 2, 3, 1), os.path.join(opts.out_dir, f"mask_pan_{int(phi)}.mp4"), fps=opts.fps, quiet=self.quiet)
+        render_path = os.path.join(opts.out_dir, f"render_{file_suffix}.mp4")
+        mask_path = os.path.join(opts.out_dir, f"mask_{file_suffix}.mp4")
+        save_video(cond_video.permute(0, 2, 3, 1), render_path, fps=opts.fps, quiet=self.quiet)
+        save_video(cond_masks.repeat(1, 3, 1, 1).permute(0, 2, 3, 1), mask_path, fps=opts.fps, quiet=self.quiet)
+
+        if getattr(opts, "scaffold_only", False):
+            if not self.quiet:
+                print(f"--> [Scaffold-Only] Saved scaffold render to: {render_path}")
+            return render_path
 
         # 5. Diffusion Denoising Inpainting
         if not self.quiet:
@@ -455,7 +620,7 @@ class PipelineV3:
 
         # 6. Save final output
         final_video = sample[0].permute(1, 2, 3, 0)  # (F, H, W, 3) in [0, 1]
-        output_path = os.path.join(opts.out_dir, f"gen_pan_{int(phi)}.mp4")
+        output_path = os.path.join(opts.out_dir, f"gen_{file_suffix}.mp4")
         save_video(final_video, output_path, fps=opts.fps, quiet=self.quiet)
 
         # 7. Side-by-side visualization
@@ -465,7 +630,7 @@ class PipelineV3:
 
         interval = torch.ones(opts.video_length, opts.sample_size[0], 20, 3, device=tensor_left.device)
         triptych = torch.cat([tensor_left, interval, tensor_mid, interval, tensor_right], dim=2)
-        viz_path = os.path.join(opts.out_dir, f"viz_pan_{int(phi)}.mp4")
+        viz_path = os.path.join(opts.out_dir, f"viz_{file_suffix}.mp4")
         save_video(triptych, viz_path, fps=opts.fps, quiet=self.quiet)
         if not self.quiet:
             print(f"\n[Success] Generated Video: {output_path}")
@@ -477,6 +642,7 @@ def main():
     parser = argparse.ArgumentParser(description="Pipeline v3: Dual-Stream Camera Trajectory Retargeting")
     parser.add_argument("--video_path", type=str, required=True, help="Path to input video file")
     parser.add_argument("--out_dir", type=str, default="./outputs_v3", help="Output directory")
+    parser.add_argument("--tag", type=str, default=None, help="Custom tag suffix for output filenames (e.g. old_scaffold_pan_-15)")
     parser.add_argument("--target_pose", nargs=5, type=float, default=[0.0, -30.0, 0.3, 0.0, 0.0], help="<theta phi r x y>")
     parser.add_argument("--video_length", type=int, default=49, help="Number of frames")
     parser.add_argument("--stride", type=int, default=1, help="Frame stride")
@@ -490,6 +656,18 @@ def main():
     parser.add_argument("--heal_hole_size", type=int, default=25, help="Max pixel area of splatting cracks to heal on proxy (default: 25)")
     parser.add_argument("--no_heal_holes", action="store_true", default=False, help="Disable healing of small splatting cracks")
     parser.add_argument("--mask_threshold", type=float, default=0.85, help="Threshold to binarize latent inpaint mask (default: 0.85)")
+    parser.add_argument("--use_mfs_scaffold", action="store_true", default=False, help="Enable experimental Multi-Frame Priority Scaffold (MFS-Scaffold). Default is False (uses legacy 3D scaffold).")
+    parser.add_argument("--use_ak_scaffold", action="store_true", default=False, help="Enable Adaptive Keyframe Occlusion Infilling Scaffold (AK-Scaffold).")
+    parser.add_argument("--ak_hole_threshold", type=float, default=0.05, help="Hole percentage threshold to trigger global infill (default: 0.05)")
+    parser.add_argument("--ak_lambda_smooth", type=float, default=0.35, help="Viterbi DP temporal smoothness penalty (default: 0.35)")
+    parser.add_argument("--ak_feather_radius", type=int, default=5, help="Soft boundary feather radius (default: 5)")
+    parser.add_argument("--neighbor_radius", type=int, default=3, help="Radius of local temporal window for Tier 1 infilling (default: 3)")
+    parser.add_argument("--no_use_all_frames", action="store_true", default=False, help="Disable Tier 2 global video memory infilling from all frames")
+    parser.add_argument("--no_cull_grazing", action="store_true", default=False, help="Disable grazing-angle culling of stretched surfaces")
+    parser.add_argument("--max_grazing_angle", type=float, default=55.0, help="Max viewing angle in degrees before surface is culled (default: 55.0)")
+    parser.add_argument("--no_depth_edge_filter", action="store_true", default=False, help="Disable silhouette edge filtering")
+    parser.add_argument("--no_align_depth_scale", action="store_true", default=False, help="Disable disparity least-squares scale alignment")
+    parser.add_argument("--scaffold_only", action="store_true", default=False, help="Only compute and save 3D point cloud proxy scaffolds, skipping diffusion inpainting")
     parser.add_argument("--quiet", action="store_true", default=False, help="Suppress verbose logging, only show progress bar")
 
     parser.add_argument("--model_name", type=str, default="alibaba-pai/CogVideoX-Fun-V1.1-5b-InP")
