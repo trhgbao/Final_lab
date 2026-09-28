@@ -48,18 +48,19 @@ class Warper3D:
         b, _, h, w = depth1.shape
 
         device = transformation1.device
-        dtype = transformation1.dtype
+        dtype = depth1.dtype
         depth1 = depth1.to(device=device, dtype=dtype)
-        transformation2 = transformation2.to(device=device, dtype=dtype)
-        intrinsic1 = intrinsic1.to(device=device, dtype=dtype)
+        transformation1 = transformation1.to(device=device, dtype=torch.float32)
+        transformation2 = transformation2.to(device=device, dtype=torch.float32)
+        intrinsic1 = intrinsic1.to(device=device, dtype=torch.float32)
         if intrinsic2 is None:
             intrinsic2 = intrinsic1.clone()
         else:
-            intrinsic2 = intrinsic2.to(device=device, dtype=dtype)
+            intrinsic2 = intrinsic2.to(device=device, dtype=torch.float32)
 
-        # Relative camera transformation (always invert in float32 for numerical precision and bfloat16/float16 compatibility)
+        # Relative camera transformation (always in float32 for geometric precision and linalg safety)
         transformation = torch.bmm(
-            transformation2.float(), torch.linalg.inv(transformation1.float())
+            transformation2, torch.linalg.inv(transformation1)
         ).to(dtype)
 
         x1d = torch.arange(0, w, device=device, dtype=dtype)[None]
@@ -495,10 +496,10 @@ class Warper3D:
         frame1 = frame1.to(self.device).to(self.dtype)
         mask1 = mask1.to(self.device).to(self.dtype)
         depth1 = depth1.to(self.device).to(self.dtype)
-        transformation1 = transformation1.to(self.device).to(self.dtype)
-        transformation2 = transformation2.to(self.device).to(self.dtype)
-        intrinsic1 = intrinsic1.to(self.device).to(self.dtype)
-        intrinsic2 = intrinsic2.to(self.device).to(self.dtype)
+        transformation1 = transformation1.to(self.device, dtype=torch.float32)
+        transformation2 = transformation2.to(self.device, dtype=torch.float32)
+        intrinsic1 = intrinsic1.to(self.device, dtype=torch.float32)
+        intrinsic2 = intrinsic2.to(self.device, dtype=torch.float32)
 
         # 1. Edge & Silhouette filtering
         if filter_depth_edges:
