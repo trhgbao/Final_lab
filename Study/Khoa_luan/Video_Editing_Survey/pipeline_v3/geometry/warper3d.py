@@ -57,8 +57,10 @@ class Warper3D:
         else:
             intrinsic2 = intrinsic2.to(device=device, dtype=dtype)
 
-        # Relative camera transformation
-        transformation = torch.bmm(transformation2, torch.linalg.inv(transformation1))  # (b, 4, 4)
+        # Relative camera transformation (always invert in float32 for numerical precision and bfloat16/float16 compatibility)
+        transformation = torch.bmm(
+            transformation2.float(), torch.linalg.inv(transformation1.float())
+        ).to(dtype)
 
         x1d = torch.arange(0, w, device=device, dtype=dtype)[None]
         y1d = torch.arange(0, h, device=device, dtype=dtype)[:, None]
@@ -68,7 +70,7 @@ class Warper3D:
         ones_4d = ones_2d[None, :, :, None, None].repeat([b, 1, 1, 1, 1])
         pos_vectors_homo = torch.stack([x2d, y2d, ones_2d], dim=2)[None, :, :, :, None]
 
-        intrinsic1_inv = torch.linalg.inv(intrinsic1)
+        intrinsic1_inv = torch.linalg.inv(intrinsic1.float()).to(dtype)
         intrinsic1_inv_4d = intrinsic1_inv[:, None, None]
         intrinsic2_4d = intrinsic2[:, None, None]
         depth_4d = depth1[:, 0][:, :, :, None, None]
@@ -295,6 +297,176 @@ class Warper3D:
         cleaned_frame = cleaned_frame * 2.0 - 1.0
         return cleaned_frame, mask_clean
 
+    def compute_surface_normals(self, depth: torch.Tensor, intrinsic: torch.Tensor) -> torch.Tensor:
+        """
+        Computes 3D surface normals for each pixel in camera coordinate frame.
+        Args:
+            depth: (b, 1, h, w) depth map
+            intrinsic: (b, 3, 3) camera intrinsics
+        Returns:
+            normals: (b, 3, h, w) unit surface normals facing camera
+        """
+        b, _, h, w = depth.shape
+        device = depth.device
+        dtype = depth.dtype
+
+        x1d = torch.arange(0, w, device=device, dtype=dtype)[None]
+        y1d = torch.arange(0, h, device=device, dtype=dtype)[:, None]
+        x2d = x1d.repeat([h, 1])
+        y2d = y1d.repeat([1, w])
+        ones_2d = torch.ones(size=(h, w), device=device, dtype=dtype)
+        pos_vectors = torch.stack([x2d, y2d, ones_2d], dim=0)[None]  # (1, 3, h, w)
+
+        fx = intrinsic[:, 0:1, 0:1].unsqueeze(-1)
+        fy = intrinsic[:, 1:2, 1:2].unsqueeze(-1)
+        cx = intrinsic[:, 0:1, 2:3].unsqueeze(-1)
+        cy = intrinsic[:, 1:2, 2:3].unsqueeze(-1)
+
+        X = (pos_vectors[:, 0:1] - cx) / fx * depth
+        Y = (pos_vectors[:, 1:2] - cy) / fy * depth
+        Z = depth
+        points_3d = torch.cat([X, Y, Z], dim=1)  # (b, 3, h, w)
+
+        dx = torch.zeros_like(points_3d)
+        dx[:, :, :, 1:-1] = (points_3d[:, :, :, 2:] - points_3d[:, :, :, :-2]) / 2.0
+        dx[:, :, :, 0] = points_3d[:, :, :, 1] - points_3d[:, :, :, 0]
+        dx[:, :, :, -1] = points_3d[:, :, :, -1] - points_3d[:, :, :, -2]
+
+        dy = torch.zeros_like(points_3d)
+        dy[:, :, 1:-1, :] = (points_3d[:, :, 2:, :] - points_3d[:, :, :-2, :]) / 2.0
+        dy[:, :, 0, :] = points_3d[:, :, 1, :] - points_3d[:, :, 0, :]
+        dy[:, :, -1, :] = points_3d[:, :, -1, :] - points_3d[:, :, -2, :]
+
+        nx = dx[:, 1] * dy[:, 2] - dx[:, 2] * dy[:, 1]
+        ny = dx[:, 2] * dy[:, 0] - dx[:, 0] * dy[:, 2]
+        nz = dx[:, 0] * dy[:, 1] - dx[:, 1] * dy[:, 0]
+        normals = torch.stack([nx, ny, nz], dim=1)
+
+        norm = torch.norm(normals, dim=1, keepdim=True) + 1e-8
+        normals = normals / norm
+
+        ray = points_3d / (torch.norm(points_3d, dim=1, keepdim=True) + 1e-8)
+        dot = (normals * ray).sum(dim=1, keepdim=True)
+        normals = torch.where(dot > 0, -normals, normals)
+
+        return normals
+
+    def compute_reliable_depth_mask(
+        self,
+        depth: torch.Tensor,
+        window_size: int = 5,
+        ratio_thresh: float = 0.35,
+    ) -> torch.Tensor:
+        """
+        Detects depth discontinuities/silhouette edges and returns a mask of reliable surfaces
+        (inspired by NVIDIA GEN3C reliable_depth_mask_range_batch).
+        """
+        depth_pos = torch.clamp(depth, min=1e-4)
+        local_max = F.max_pool2d(depth_pos, kernel_size=window_size, stride=1, padding=window_size // 2)
+        local_min = -F.max_pool2d(-depth_pos, kernel_size=window_size, stride=1, padding=window_size // 2)
+        local_mean = F.avg_pool2d(depth_pos, kernel_size=window_size, stride=1, padding=window_size // 2)
+
+        ratio = (local_max - local_min) / (local_mean + 1e-6)
+        reliable = ((ratio < ratio_thresh) & (depth > 0.05)).float()
+        return reliable
+
+    def compute_grazing_angle_mask(
+        self,
+        depth1: torch.Tensor,
+        transformation1: torch.Tensor,
+        transformation2: torch.Tensor,
+        intrinsic1: torch.Tensor,
+        max_angle_deg: float = 55.0,
+    ) -> torch.Tensor:
+        """
+        Computes a mask of pixels whose surface normal forms an acute angle with the target camera viewing ray.
+        Surfaces viewed at grazing angles (> max_angle_deg) are culled (mask = 0).
+        """
+        b, _, h, w = depth1.shape
+        device = depth1.device
+        dtype = depth1.dtype
+
+        normals1 = self.compute_surface_normals(depth1, intrinsic1)
+
+        rel_transform = torch.bmm(
+            transformation2.float(),
+            torch.linalg.inv(transformation1.float()),
+        ).to(dtype)
+        R_rel = rel_transform[:, :3, :3]
+        t_rel = rel_transform[:, :3, 3:]
+
+        fx = intrinsic1[:, 0:1, 0:1].unsqueeze(-1)
+        fy = intrinsic1[:, 1:2, 1:2].unsqueeze(-1)
+        cx = intrinsic1[:, 0:1, 2:3].unsqueeze(-1)
+        cy = intrinsic1[:, 1:2, 2:3].unsqueeze(-1)
+        x1d = torch.arange(0, w, device=device, dtype=dtype)[None]
+        y1d = torch.arange(0, h, device=device, dtype=dtype)[:, None]
+        x2d = x1d.repeat([h, 1])
+        y2d = y1d.repeat([1, w])
+        X = (x2d[None, None] - cx) / fx * depth1
+        Y = (y2d[None, None] - cy) / fy * depth1
+        Z = depth1
+        pts1 = torch.cat([X, Y, Z], dim=1)
+
+        pts1_flat = pts1.view(b, 3, -1)
+        pts2_flat = torch.bmm(R_rel, pts1_flat) + t_rel
+        pts2 = pts2_flat.view(b, 3, h, w)
+
+        normals1_flat = normals1.view(b, 3, -1)
+        normals2_flat = torch.bmm(R_rel, normals1_flat)
+        normals2 = normals2_flat.view(b, 3, h, w)
+        normals2 = normals2 / (torch.norm(normals2, dim=1, keepdim=True) + 1e-8)
+
+        ray2 = pts2 / (torch.norm(pts2, dim=1, keepdim=True) + 1e-8)
+        cos_angle = -(ray2 * normals2).sum(dim=1, keepdim=True)
+
+        cos_thresh = np.cos(np.deg2rad(max_angle_deg))
+        valid_mask = (cos_angle > cos_thresh).float()
+        valid_mask = valid_mask * (pts2[:, 2:3] > 0.05).float()
+
+        return valid_mask
+
+    def align_depth_scale(
+        self,
+        source_depth: torch.Tensor,
+        target_depth: torch.Tensor,
+        covisible_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Aligns source_depth scale and shift to target_depth in inverse depth (disparity) space
+        via least squares (inspired by NVIDIA GEN3C camera_utils.py).
+        """
+        device = source_depth.device
+        src_inv = 1.0 / torch.clamp(source_depth, min=0.01, max=100.0)
+        tgt_inv = 1.0 / torch.clamp(target_depth, min=0.01, max=100.0)
+
+        valid = (covisible_mask > 0.5) & (source_depth > 0.05) & (target_depth > 0.05)
+        if valid.sum() < 100:
+            return source_depth
+
+        src_val = src_inv[valid].view(-1, 1)
+        tgt_val = tgt_inv[valid].view(-1, 1)
+
+        try:
+            q_low, q_high = torch.quantile(src_val, torch.tensor([0.1, 0.9], device=device))
+            inliers = (src_val >= q_low) & (src_val <= q_high)
+            if inliers.sum() < 50:
+                return source_depth
+
+            src_sub = src_val[inliers].view(-1, 1)
+            tgt_sub = tgt_val[inliers].view(-1, 1)
+            ones = torch.ones_like(src_sub)
+            A = torch.cat([src_sub, ones], dim=1)
+
+            solution = torch.linalg.lstsq(A, tgt_sub).solution
+            scale = torch.clamp(solution[0, 0], min=0.2, max=5.0)
+            bias = torch.clamp(solution[1, 0], min=-5.0, max=5.0)
+            aligned_inv = src_inv * scale + bias
+            aligned_depth = 1.0 / torch.clamp(aligned_inv, min=0.01, max=100.0)
+            return aligned_depth
+        except Exception:
+            return source_depth
+
     def forward_warp(
         self,
         frame1: torch.Tensor,
@@ -307,25 +479,12 @@ class Warper3D:
         clean_mask: bool = True,
         heal_holes: bool = True,
         max_hole_area: int = 25,
+        cull_grazing_angles: bool = False,
+        max_grazing_angle: float = 55.0,
+        filter_depth_edges: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Forward warps frame1 from transformation1 to transformation2.
-        
-        Args:
-            frame1: (b, 3, h, w) in range [-1, 1]
-            mask1: (b, 1, h, w) 1 for valid, 0 for unknown
-            depth1: (b, 1, h, w) metric/relative depth
-            transformation1: (b, 4, 4) source camera pose
-            transformation2: (b, 4, 4) target camera pose
-            intrinsic1: (b, 3, 3) source camera intrinsics
-            intrinsic2: (b, 3, 3) target camera intrinsics
-            clean_mask: whether to dilate disocclusions to clean fringe noise
-            heal_holes: whether to heal small splatting pinholes using neighbor colors
-            max_hole_area: max area in pixels for a hole to be considered a splatting crack
-        Returns:
-            warped_frame: (b, 3, h, w) in range [-1, 1]
-            mask: (b, 1, h, w) 1 for valid, 0 for disoccluded hole
-            flow12: (b, 2, h, w) pixel displacement flow
+        Forward warps frame1 from transformation1 to transformation2 with optional grazing-angle culling.
         """
         b, c, h, w = frame1.shape
         if mask1 is None:
@@ -341,6 +500,18 @@ class Warper3D:
         intrinsic1 = intrinsic1.to(self.device).to(self.dtype)
         intrinsic2 = intrinsic2.to(self.device).to(self.dtype)
 
+        # 1. Edge & Silhouette filtering
+        if filter_depth_edges:
+            rel_mask = self.compute_reliable_depth_mask(depth1)
+            mask1 = mask1 * rel_mask
+
+        # 2. Grazing-Angle Surface Culling (GenWarp / NVS-Solver / GEN3C)
+        if cull_grazing_angles:
+            grazing_mask = self.compute_grazing_angle_mask(
+                depth1, transformation1, transformation2, intrinsic1, max_angle_deg=max_grazing_angle
+            )
+            mask1 = mask1 * grazing_mask
+
         trans_points1 = self.compute_transformed_points(depth1, transformation1, transformation2, intrinsic1, intrinsic2)
         trans_coordinates = trans_points1[:, :, :, :2, 0] / trans_points1[:, :, :, 2:3, 0]
         trans_depth1 = trans_points1[:, :, :, 2, 0]
@@ -354,6 +525,117 @@ class Warper3D:
             warped_frame2, mask2 = self.clean_points(warped_frame2, mask2)
 
         return warped_frame2, mask2, flow12
+
+    def multi_frame_forward_warp(
+        self,
+        frames: torch.Tensor,
+        depths: torch.Tensor,
+        transformation_s: torch.Tensor,
+        transformation_t: torch.Tensor,
+        intrinsic_s: torch.Tensor,
+        intrinsic_t: Optional[torch.Tensor] = None,
+        target_idx: int = 0,
+        neighbor_radius: int = 3,
+        use_all_frames: bool = True,
+        cull_grazing_angles: bool = True,
+        max_grazing_angle: float = 55.0,
+        filter_depth_edges: bool = True,
+        align_depth_scale: bool = True,
+        clean_mask: bool = True,
+        heal_holes: bool = True,
+        max_hole_area: int = 25,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Multi-Frame Priority-Based Splatting (MFS-Scaffold).
+        Combines visual information from across the video into the novel view proxy:
+        - Tier 0: Primary anchor frame target_idx splats first (locked, zero ghosting).
+        - Tier 1: Temporal neighbors (target_idx +/- 1, 2, 3...) fill local disocclusions.
+        - Tier 2: Remaining frames across the entire video fill wide-angle voids.
+        - Tier 3: Hole healing and boundary cleanup.
+        """
+        num_frames = frames.shape[0]
+        if intrinsic_t is None:
+            intrinsic_t = intrinsic_s.clone()
+
+        # Step 1 (Tier 0): Splat primary anchor frame
+        canvas, canvas_mask, flow = self.forward_warp(
+            frames[target_idx : target_idx + 1],
+            None,
+            depths[target_idx : target_idx + 1],
+            transformation_s[target_idx : target_idx + 1],
+            transformation_t[target_idx : target_idx + 1],
+            intrinsic_s[target_idx : target_idx + 1] if intrinsic_s.shape[0] > 1 else intrinsic_s,
+            intrinsic_t[target_idx : target_idx + 1] if intrinsic_t.shape[0] > 1 else intrinsic_t,
+            clean_mask=False,
+            heal_holes=False,
+            cull_grazing_angles=cull_grazing_angles,
+            max_grazing_angle=max_grazing_angle,
+            filter_depth_edges=filter_depth_edges,
+        )
+
+        # Step 2: Build candidate list in order of priority
+        neighbors = []
+        for r in range(1, neighbor_radius + 1):
+            if target_idx - r >= 0:
+                neighbors.append(target_idx - r)
+            if target_idx + r < num_frames:
+                neighbors.append(target_idx + r)
+
+        remaining = []
+        if use_all_frames:
+            for idx in range(num_frames):
+                if idx != target_idx and idx not in neighbors:
+                    remaining.append(idx)
+
+        candidates = neighbors + remaining
+
+        # Step 3: Progressive Infilling into EMPTY pixels only (canvas_mask == 0)
+        target_k = intrinsic_t[target_idx : target_idx + 1] if intrinsic_t.shape[0] > 1 else intrinsic_t
+        target_pose = transformation_t[target_idx : target_idx + 1]
+
+        for cand_idx in candidates:
+            # Early exit if canvas is practically full
+            if canvas_mask.mean().item() >= 0.98:
+                break
+
+            cand_depth = depths[cand_idx : cand_idx + 1]
+            if align_depth_scale:
+                cand_depth = self.align_depth_scale(
+                    cand_depth, depths[target_idx : target_idx + 1], canvas_mask
+                )
+
+            cand_k = intrinsic_s[cand_idx : cand_idx + 1] if intrinsic_s.shape[0] > 1 else intrinsic_s
+            cand_pose_s = transformation_s[cand_idx : cand_idx + 1]
+
+            cand_warp, cand_mask, _ = self.forward_warp(
+                frames[cand_idx : cand_idx + 1],
+                None,
+                cand_depth,
+                cand_pose_s,
+                target_pose,
+                cand_k,
+                target_k,
+                clean_mask=False,
+                heal_holes=False,
+                cull_grazing_angles=cull_grazing_angles,
+                max_grazing_angle=max_grazing_angle,
+                filter_depth_edges=filter_depth_edges,
+            )
+
+            # Infill rule: Only overwrite pixels that are currently EMPTY
+            fill_region = (canvas_mask < 0.5) & (cand_mask > 0.5)
+            if fill_region.any():
+                fill_mask_3c = fill_region.repeat(1, 3, 1, 1)
+                canvas = torch.where(fill_mask_3c, cand_warp, canvas)
+                canvas_mask = torch.where(fill_region, torch.ones_like(canvas_mask), canvas_mask)
+
+        # Step 4 (Tier 3): Discretization crack healing & boundary cleanup
+        if heal_holes and max_hole_area > 0:
+            canvas, canvas_mask = self.heal_small_holes(canvas, canvas_mask, max_hole_area=max_hole_area)
+        if clean_mask:
+            canvas, canvas_mask = self.clean_points(canvas, canvas_mask)
+
+        return canvas, canvas_mask, flow
 
     def double_reprojection_warp(
         self,

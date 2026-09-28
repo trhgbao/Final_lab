@@ -15,6 +15,14 @@ Outputs for each trajectory:
 
 import os
 import sys
+import warnings
+
+# Enforce offline mode for Hugging Face and Diffusers on Kaggle
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+warnings.filterwarnings("ignore", message=".*Flax.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import argparse
 import base64
 import cv2

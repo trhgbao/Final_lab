@@ -452,6 +452,17 @@ class PipelineV3:
             base_d = np.tile(y_grad, (1, w))
             depths_tensor = torch.from_numpy(np.tile(base_d[None, None, :, :], (opts.video_length, 1, 1, 1))).to(self.device).float()
 
+            # Cache fallback depth to prevent re-running DepthCrafter on step [2/2] or next tiers
+            if cache_path:
+                try:
+                    os.makedirs(cache_dir, exist_ok=True)
+                    depth_np = depths_tensor.squeeze(1).cpu().numpy().astype(np.float32)
+                    np.savez_compressed(cache_path, depths=depth_np, depth=depth_np)
+                    if not self.quiet:
+                        print(f"--> [DepthCache] Cached fallback depth to {cache_path}")
+                except Exception:
+                    pass
+
         depths_tensor = F.interpolate(depths_tensor, size=opts.sample_size, mode="bilinear", align_corners=False)
 
         # 3. Dynamic Scene Scale & Camera Poses

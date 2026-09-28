@@ -407,9 +407,9 @@ class AdaptiveKeyframeScaffold(nn.Module):
         F_num, _, H, W = frames.shape
         frames = frames.to(self.device, self.dtype)
         depths = depths.to(self.device, self.dtype)
-        poses_src = poses_src.to(self.device, self.dtype)
-        poses_tgt = poses_tgt.to(self.device, self.dtype)
-        intrinsics = intrinsics.to(self.device, self.dtype)
+        poses_src = poses_src.to(self.device, torch.float32)
+        poses_tgt = poses_tgt.to(self.device, torch.float32)
+        intrinsics = intrinsics.to(self.device, torch.float32)
 
         # -------------------------------------------------------------
         # Step 1: Base Scaffolds (Context Preservation First)

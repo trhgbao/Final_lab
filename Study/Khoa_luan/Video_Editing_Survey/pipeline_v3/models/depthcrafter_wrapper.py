@@ -408,14 +408,34 @@ def resolve_depthcrafter_paths(
                 break
 
     # Dynamic fallback scan across all of /kaggle/input if still not found
+    if resolved_unet is None and os.path.exists("/kaggle/input"):
+        for root, dirs, files in os.walk("/kaggle/input"):
+            if "depthcrafter" in root.lower() and "config.json" in files and any(f.endswith(".safetensors") or f.endswith(".bin") for f in files):
+                resolved_unet = root
+                break
+
     if resolved_svd is None and os.path.exists("/kaggle/input"):
         for root, dirs, files in os.walk("/kaggle/input"):
             if "model_index.json" in files:
                 resolved_svd = root
                 break
 
-    if resolved_svd is None:
-        resolved_svd = "stabilityai/stable-video-diffusion-img2vid-xt"
+    # If running in offline environment (e.g. Kaggle without internet), DO NOT fallback to HuggingFace online IDs
+    is_offline = (
+        os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+        or os.environ.get("HF_HUB_OFFLINE") == "1"
+        or os.path.exists("/kaggle")
+    )
+    if is_offline:
+        if resolved_unet and not os.path.exists(resolved_unet):
+            resolved_unet = None
+        if resolved_svd and not os.path.exists(resolved_svd):
+            resolved_svd = None
+    else:
+        if resolved_unet is None:
+            resolved_unet = "tencent/DepthCrafter"
+        if resolved_svd is None:
+            resolved_svd = "stabilityai/stable-video-diffusion-img2vid-xt"
 
     return resolved_unet, resolved_svd
 
@@ -442,13 +462,17 @@ class DepthCrafterEstimator:
         self.cpu_offload = cpu_offload
 
         resolved_unet, resolved_svd = resolve_depthcrafter_paths(unet_path, svd_path)
-        if resolved_unet is None or resolved_svd is None:
+        if (
+            resolved_unet is None
+            or resolved_svd is None
+            or not os.path.exists(resolved_unet)
+            or not os.path.exists(resolved_svd)
+        ):
             raise FileNotFoundError(
-                f"DepthCrafter paths could not be located!\n"
+                f"DepthCrafter local weights not found on disk (offline mode active).\n"
                 f"  UNet: {resolved_unet} (Searched: {unet_path})\n"
                 f"  SVD Backbone: {resolved_svd} (Searched: {svd_path})\n"
-                f"Please ensure /kaggle/input/datasets/tranbao0105/depthcrafter and "
-                f"stable-video-diffusion-img2vid-xt are attached."
+                f"Skipping on-the-fly network download to avoid connection timeout."
             )
 
         print(f"--> [DepthCrafter] Loading UNet from: {resolved_unet}")
