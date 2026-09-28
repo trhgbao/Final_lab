@@ -99,8 +99,8 @@ def save_video(tensor_data, save_path: str, fps: int = 10, quiet: bool = False):
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
     if isinstance(tensor_data, torch.Tensor):
         if tensor_data.dtype != torch.uint8:
-            tensor_data = torch.clamp(tensor_data, 0.0, 1.0) * 255.0
-        arr = tensor_data.detach().cpu().numpy().astype(np.uint8)
+            tensor_data = torch.clamp(tensor_data.float(), 0.0, 1.0) * 255.0
+        arr = tensor_data.detach().cpu().float().numpy().astype(np.uint8)
     else:
         arr = np.asarray(tensor_data)
         if arr.dtype != np.uint8:
